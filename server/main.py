@@ -38,6 +38,15 @@ app.add_middleware(
 def on_startup():
     create_db_and_tables()
     ensure_seed_admin_users()
+    
+    # 异步下载/检查模型文件 (为了不阻塞启动，这里简单同步检查，如果太慢可以放后台)
+    try:
+        from server.util.CaptchaUtils import ensure_model_exists, MODEL_URLS
+        for filename, url in MODEL_URLS.items():
+            ensure_model_exists(filename, url)
+    except Exception as e:
+        print(f"Warning: Failed to download models: {e}")
+
     start_scheduler()
     start_queue_worker()
 

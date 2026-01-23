@@ -7,6 +7,10 @@ __pycache__
 
 database.db
 data
+images
+
+# 排除本地的大模型文件，减小镜像体积
+server/models_onnx/
 
 web/node_modules
 web/dist
