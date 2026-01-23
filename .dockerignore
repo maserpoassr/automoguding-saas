@@ -1,0 +1,16 @@
+.git
+.github
+
+.venv
+__pycache__
+*.pyc
+
+database.db
+data
+
+web/node_modules
+web/dist
+
+*.log
+*.zip
+.DS_Store
