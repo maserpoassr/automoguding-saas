@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./data/images:/app/server/images
+    environment:
+      - TZ=Asia/Shanghai
+      - DB_PATH=/app/data/database.db
+    restart: unless-stopped

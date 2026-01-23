@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+apscheduler
+python-multipart
+aes-pkcs5==1.0.3
+requests
+numpy
+onnxruntime
+opencv-python-headless
+pillow
+cryptography
+coloredlogs
