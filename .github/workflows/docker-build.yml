@@ -35,4 +35,4 @@ jobs:
           context: .
           file: ./Dockerfile
           push: ${{ github.event_name == 'push' }}
-          tags: ghcr.io/${{ github.repository }}:v1
+          tags: ghcr.io/${{ github.repository }}:v2
