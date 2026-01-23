@@ -2,7 +2,7 @@
 FROM node:18-bookworm-slim AS frontend-build
 WORKDIR /app/web
 COPY web/package*.json ./
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+RUN npm ci --no-audit --no-fund || npm install --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 
