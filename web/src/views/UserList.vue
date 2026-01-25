@@ -181,7 +181,12 @@
                  <span style="margin-left: 10px; color: #666;">{{ item.message }}</span>
                </template>
                <div style="padding: 10px; background-color: #f5f7fa; border-radius: 4px;">
+                   <div style="margin-bottom: 10px;">
+                      <div style="font-weight: 700; margin-bottom: 6px;">结果</div>
+                      <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">{{ item.message }}</pre>
+                   </div>
                    <div v-if="item.details">
+                       <el-divider>详情</el-divider>
                        <p v-for="(val, key) in item.details" :key="key">
                            <strong>{{ key }}:</strong> {{ val }}
                        </p>
@@ -190,6 +195,8 @@
                        <el-divider>报告内容</el-divider>
                        <pre style="white-space: pre-wrap; font-family: inherit;">{{ item.report_content }}</pre>
                    </div>
+                   <el-divider>原始数据</el-divider>
+                   <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">{{ JSON.stringify(item, null, 2) }}</pre>
                </div>
             </el-collapse-item>
          </el-collapse>

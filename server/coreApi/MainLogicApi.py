@@ -358,12 +358,31 @@ class ApiClient:
 
         if self.config.get_value("userInfo.userType") != "teacher":
             url = "attendence/clock/v5/save"
+            device = self.config.get_value("config.device")
+            user_id = self.config.get_value("userInfo.userId")
+            location = self.config.get_value("config.clockIn.location") or {}
+            if not isinstance(location, dict):
+                location = {}
+            address = self.config.get_value("config.clockIn.location.address") or location.get("address")
+            missing = []
+            if not device:
+                missing.append("device")
+            if not checkin_info.get("type"):
+                missing.append("type")
+            if not planId:
+                missing.append("planId")
+            if not user_id:
+                missing.append("userId")
+            if not address:
+                missing.append("clockIn.location.address")
+            if missing:
+                raise ValueError("打卡签名必填字段缺失: " + ", ".join(missing))
             sign_data = [
-                self.config.get_value("config.device"),
-                checkin_info.get("type"),
+                device,
+                str(checkin_info.get("type")),
                 planId,
-                self.config.get_value("userInfo.userId"),
-                self.config.get_value("config.clockIn.location.address"),
+                user_id,
+                str(address),
             ]
 
         logger.info(f'打卡类型：{checkin_info.get("type")}')
@@ -395,7 +414,10 @@ class ApiClient:
             "t": aes_encrypt(str(int(time.time() * 1000))),
         })
 
-        data.update(self.config.get_value("config.clockIn.location"))
+        location2 = self.config.get_value("config.clockIn.location") or {}
+        if not isinstance(location2, dict):
+            location2 = {}
+        data.update(location2)
 
         headers = self._get_authenticated_headers(sign_data)
 

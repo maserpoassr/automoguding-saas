@@ -23,8 +23,15 @@ def create_sign(*args) -> str:
         ValueError: 如果在签名生成过程中发生错误，将抛出此异常。
     """
     try:
+        args2 = []
+        for i, a in enumerate(args):
+            if a is None:
+                raise ValueError(f"签名参数缺失: index={i}")
+            if not isinstance(a, str):
+                a = str(a)
+            args2.append(a)
         # 将所有输入参数连接成一个长字符串，并在末尾添加盐值
-        sign_str = "".join(args) + "3478cbbc33f84bd00d75d7dfa69e0daa"
+        sign_str = "".join(args2) + "3478cbbc33f84bd00d75d7dfa69e0daa"
         # 使用MD5对最终字符串进行加密，并返回加密后的十六进制签名
         return md5(sign_str.encode("utf-8")).hexdigest()
 

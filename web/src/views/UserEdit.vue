@@ -59,7 +59,7 @@
           </el-form-item>
           <el-form-item label="打卡周期">
             <el-checkbox-group v-model="form.clockIn.schedule.weekdays" class="week-group">
-              <el-checkbox v-for="d in weekdayOptions" :key="d.value" :label="d.value">{{ d.label }}</el-checkbox>
+              <el-checkbox v-for="d in weekdayOptions" :key="d.value" :value="d.value">{{ d.label }}</el-checkbox>
             </el-checkbox-group>
           </el-form-item>
           <el-form-item label="打卡天数">
@@ -106,7 +106,7 @@
           </el-form-item>
           <el-form-item v-if="form.reportSettings.daily.enabled" label="提交日(周)">
             <el-checkbox-group v-model="form.reportSettings.daily.submitDays" class="week-group">
-              <el-checkbox v-for="d in weekdayOptions" :key="d.value" :label="d.value">{{ d.label }}</el-checkbox>
+              <el-checkbox v-for="d in weekdayOptions" :key="d.value" :value="d.value">{{ d.label }}</el-checkbox>
             </el-checkbox-group>
           </el-form-item>
           <el-form-item v-if="form.reportSettings.daily.enabled" label="日报预览">

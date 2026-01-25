@@ -51,7 +51,7 @@ const submit = async () => {
     const res = await http.post('/auth/login', form)
     const token = res.data?.token
     if (!token) throw new Error('no token')
-    auth.setAuth({ token, role: res.data?.role, username: res.data?.username })
+    auth.setAuth(token, res.data?.username, res.data?.role)
     router.replace('/')
   } catch (e) {
     ElMessage.error(e.friendlyMessage || e.response?.data?.detail || '登录失败')

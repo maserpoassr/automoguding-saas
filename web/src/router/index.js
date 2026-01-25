@@ -16,12 +16,18 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const auth = useAuthStore()
-  if (to.meta.public) return true
-  if (!auth.isAuthed) return '/login'
+  if (auth.isAuthed && !auth.role) auth.logout()
+  if (to.meta.public) {
+    if (auth.isAuthed && to.path === '/login') return '/'
+    return true
+  }
+  if (!auth.isAuthed) return { path: '/login', query: { redirect: to.fullPath } }
   const roles = to.meta.roles
   if (!roles) return true
   if (roles.includes(auth.role)) return true
-  return '/'
+  if (to.path !== '/') return '/'
+  auth.logout()
+  return { path: '/login' }
 })
 
 export default router

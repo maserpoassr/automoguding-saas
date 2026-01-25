@@ -23,6 +23,7 @@ def perform_clock_in(
     try:
         current_time = datetime.now()
         current_hour = current_time.hour
+        address = config.get_value("config.clockIn.location.address")
 
         # 确定打卡类型
         if forced_checkin_type in ("START", "END"):
@@ -67,6 +68,11 @@ def perform_clock_in(
                 "status": "skip",
                 "message": skip_message,
                 "task_type": "打卡",
+                "details": {
+                    "打卡类型": display_type,
+                    "打卡时间": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "打卡地点": address,
+                },
             }
 
         last_checkin_info = api_client.get_checkin_info()
@@ -84,6 +90,11 @@ def perform_clock_in(
                         "status": "skip",
                         "message": f"今日 {display_type} 卡已打，无需重复打卡",
                         "task_type": "打卡",
+                        "details": {
+                            "打卡类型": display_type,
+                            "上次打卡时间": create_time_str,
+                            "打卡地点": address,
+                        },
                     }
 
         user_name = desensitize_name(config.get_value("userInfo.nikeName"))
@@ -119,12 +130,27 @@ def perform_clock_in(
                 "姓名": config.get_value("userInfo.nikeName"),
                 "打卡类型": display_type,
                 "打卡时间": current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                "打卡地点": config.get_value("config.clockIn.location.address"),
+                "打卡地点": address,
             },
         }
     except Exception as e:
         logger.error(f"打卡失败: {e}")
-        return {"status": "fail", "message": f"打卡失败: {str(e)}", "task_type": "打卡"}
+        err = str(e) or "unknown"
+        tips = []
+        if "clockIn.location.address" in err:
+            tips.append("请先在用户配置中填写打卡地址，或使用“账号地址填充”")
+        if "planId" in err:
+            tips.append("请先获取并保存 planId（非教师账号需要）")
+        if "token" in err or "Token" in err:
+            tips.append("账号 token 失效时会自动重登；如持续失败请检查账号/密码")
+        details = {
+            "姓名": config.get_value("userInfo.nikeName"),
+            "打卡时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "打卡地点": config.get_value("config.clockIn.location.address"),
+        }
+        if tips:
+            details["建议"] = "；".join(tips)
+        return {"status": "fail", "message": f"打卡失败: {err}", "task_type": "打卡", "details": details}
 
 
 def _submit_report_common(
@@ -147,10 +173,15 @@ def _submit_report_common(
 
     if not config.get_value(f"config.reportSettings.{config_key}.enabled"):
         logger.info(f"用户未开启{task_name}功能，跳过")
+        now = datetime.now()
         return {
             "status": "skip",
             "message": f"用户未开启{task_name}功能",
             "task_type": task_name,
+            "details": {
+                "提交时间": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "开关": "未开启",
+            },
         }
 
     current_time = datetime.now()
@@ -162,6 +193,10 @@ def _submit_report_common(
             "status": "skip",
             "message": f"未到{task_name}提交时间",
             "task_type": task_name,
+            "details": {
+                "提交时间": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "开关": "已开启",
+            },
         }
 
     try:

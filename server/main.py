@@ -21,13 +21,11 @@ async def _security_headers(request, call_next):
     resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     return resp
 
-
 def _strip_wrapping(s: str) -> str:
     s2 = (s or "").strip()
     while len(s2) >= 2 and s2[0] == s2[-1] and s2[0] in ["'", '"', "`"]:
         s2 = s2[1:-1].strip()
     return s2
-
 
 def _parse_origins(s: str) -> list[str]:
     raw = _strip_wrapping(s)
@@ -39,7 +37,6 @@ def _parse_origins(s: str) -> list[str]:
         if v:
             out.append(v)
     return out
-
 
 app_env = (os.getenv("APP_ENV") or os.getenv("ENV") or "").strip().lower()
 origins_env = os.getenv("CORS_ORIGINS") or os.getenv("FRONTEND_ORIGINS") or ""
@@ -56,8 +53,6 @@ if origins or app_env not in ["prod", "production"]:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()

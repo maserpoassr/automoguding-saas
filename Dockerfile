@@ -30,7 +30,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 COPY server/ ./server/
 COPY --from=frontend-build /app/web/dist ./web/dist
 
-ARG DOWNLOAD_MODELS=1
+ARG DOWNLOAD_MODELS=0
 RUN if [ "$DOWNLOAD_MODELS" = "1" ]; then \
       python -c "from server.util.CaptchaUtils import ensure_model_exists, MODEL_URLS; [ensure_model_exists(k,v) for k,v in MODEL_URLS.items()]" ; \
     fi

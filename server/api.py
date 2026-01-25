@@ -25,6 +25,8 @@ from server.secret_store import encrypt_secret
 
 router = APIRouter()
 
+NOMINATIM_BASE_URL = "https://nominatim.openstreetmap.org"
+
 def _is_private_or_special_ip(ip: str) -> bool:
     try:
         a = ipaddress.ip_address(ip)
@@ -994,7 +996,7 @@ def geocode_search(q: str = Query(..., min_length=1, max_length=200), operator: 
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"地理搜索失败: {str(e)}")
 
-    nominatim_base = (os.getenv("NOMINATIM_BASE_URL") or "https://nominatim.openstreetmap.org").strip().strip("`").strip('"').strip("'").rstrip("/")
+    nominatim_base = NOMINATIM_BASE_URL.rstrip("/")
     params = {"q": q2, "format": "json", "limit": 5, "addressdetails": 1}
     headers = {"User-Agent": "AutoMoGuDingSaaS/1.0", "Accept-Language": "zh-CN,zh;q=0.9"}
     last_err: Optional[Exception] = None
@@ -1102,7 +1104,7 @@ def geocode_reverse(
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"逆地理解析失败: {str(e)}")
 
-    nominatim_base = (os.getenv("NOMINATIM_BASE_URL") or "https://nominatim.openstreetmap.org").strip().strip("`").strip('"').strip("'").rstrip("/")
+    nominatim_base = NOMINATIM_BASE_URL.rstrip("/")
     params = {"lat": lat, "lon": lon, "format": "json", "zoom": 18, "addressdetails": 1}
     headers = {"User-Agent": "AutoMoGuDingSaaS/1.0", "Accept-Language": "zh-CN,zh;q=0.9"}
     last_err: Optional[Exception] = None
