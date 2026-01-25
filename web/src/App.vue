@@ -11,7 +11,6 @@
           <template v-if="!isMobile">
             <el-button v-if="isAuthed" @click="go('/')">用户</el-button>
             <el-button v-if="isAuthed && isAdmin" @click="go('/audit')">审计日志</el-button>
-            <el-button v-if="isAuthed && isAdmin" @click="go('/admins')">账号管理</el-button>
             <el-switch
               v-model="isDark"
               inline-prompt
@@ -45,7 +44,6 @@
         <div class="drawer-actions">
           <el-button v-if="isAuthed" style="width: 100%" @click="navTo('/')">用户</el-button>
           <el-button v-if="isAuthed && isAdmin" style="width: 100%" @click="navTo('/audit')">审计日志</el-button>
-          <el-button v-if="isAuthed && isAdmin" style="width: 100%" @click="navTo('/admins')">账号管理</el-button>
         </div>
 
         <div class="drawer-section">

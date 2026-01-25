@@ -25,7 +25,7 @@
         <el-table-column prop="target_user_id" label="目标用户ID" width="120" />
         <el-table-column label="详情" min-width="240">
           <template #default="scope">
-            <pre class="detail">{{ stringify(scope.row.detail) }}</pre>
+            <pre class="detail">{{ scope.row.detailText }}</pre>
           </template>
         </el-table-column>
       </el-table>
@@ -56,6 +56,7 @@ const query = ref('')
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
+let fetchAbort = null
 
 const stringify = (v) => {
   try {
@@ -66,6 +67,8 @@ const stringify = (v) => {
 }
 
 const fetchLogs = async () => {
+  if (fetchAbort) fetchAbort.abort()
+  fetchAbort = new AbortController()
   loading.value = true
   try {
     const res = await http.get('/audit-logs/page', {
@@ -74,10 +77,12 @@ const fetchLogs = async () => {
         pageSize: pageSize.value,
         q: query.value?.trim() || undefined,
       },
+      signal: fetchAbort.signal,
     })
-    items.value = res.data.items || []
+    items.value = (res.data.items || []).map((it) => ({ ...it, detailText: stringify(it.detail) }))
     total.value = res.data.total || 0
   } catch (e) {
+    if (e?.code === 'ERR_CANCELED') return
     ElMessage.error(e.friendlyMessage || '获取审计日志失败')
   } finally {
     loading.value = false
