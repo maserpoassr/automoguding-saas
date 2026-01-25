@@ -59,7 +59,7 @@
         <el-card v-for="u in users" :key="u.id" class="mobile-card" shadow="never">
           <div class="mobile-card-top">
             <div class="mobile-title">
-              <div class="mobile-account">{{ u.phone }}</div>
+              <div class="mobile-account">{{ maskPhone(u.phone) }}</div>
               <div class="mobile-sub">ID：{{ u.id }}</div>
             </div>
             <div class="mobile-tags">
@@ -117,7 +117,11 @@
       >
         <el-table-column v-if="canWrite" type="selection" width="44" />
         <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column prop="phone" label="账号" width="160" />
+        <el-table-column label="账号" width="160">
+          <template #default="scope">
+            {{ maskPhone(scope.row.phone) }}
+          </template>
+        </el-table-column>
         <el-table-column label="备注" min-width="180">
           <template #default="scope">
             {{ scope.row.remark || '-' }}
@@ -165,7 +169,6 @@
     </div>
     <div v-if="isMobile && canWrite && batchMode" class="mobile-batch-spacer"></div>
 
-    <!-- 日志弹窗 -->
     <el-dialog v-model="logVisible" title="执行日志" :width="isMobile ? '92%' : '70%'">
       <div v-if="currentLogs && currentLogs.length">
          <el-collapse v-model="activeLogNames">
@@ -309,6 +312,17 @@ const router = useRouter()
 const auth = useAuthStore()
 const canWrite = computed(() => auth.canWrite)
 const canDelete = computed(() => auth.isAdmin)
+let usersAbort = null
+let jobAbort = null
+
+const maskPhone = (value) => {
+  const s = String(value || '').trim()
+  if (!s) return ''
+  const digits = s.replace(/\D/g, '')
+  if (!digits) return ''
+  if (digits.length < 4) return '*'.repeat(digits.length)
+  return '********' + digits.slice(-4)
+}
 
 const _parseIsoLikeToDate = (ts) => {
   const s = String(ts || '').trim()
@@ -421,6 +435,8 @@ const updateIsMobile = () => {
 }
 
 const fetchUsers = async () => {
+  if (usersAbort) usersAbort.abort()
+  usersAbort = new AbortController()
   loading.value = true
   try {
     const res = await http.get('/users/page', {
@@ -429,10 +445,12 @@ const fetchUsers = async () => {
         pageSize: pageSize.value,
         q: query.value?.trim() || undefined,
       },
+      signal: usersAbort.signal,
     })
     total.value = res.data.total || 0
     users.value = (res.data.items || []).map(u => ({ ...u, running: false }))
   } catch (error) {
+    if (error?.code === 'ERR_CANCELED') return
     ElMessage.error('获取用户列表失败')
   } finally {
     loading.value = false
@@ -458,7 +476,7 @@ const runTask = async (id) => {
   try {
     await http.post(`/users/${id}/run`)
     ElMessage.success('任务执行完成')
-    fetchUsers() // 刷新状态，这也将获取最新的日志
+    fetchUsers()
   } catch (error) {
     ElMessage.error('执行失败: ' + (error.friendlyMessage || error.message))
   } finally {
@@ -482,6 +500,7 @@ const startPolling = () => {
   let ticks = 0
   pollTimer.value = setInterval(() => {
     ticks += 1
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
     fetchUsers()
     if (ticks >= 40) stopPolling()
   }, 3000)
@@ -512,15 +531,18 @@ const runBatch = async () => {
 
 const refreshJob = async () => {
   if (!jobId.value) return
+  if (jobAbort) jobAbort.abort()
+  jobAbort = new AbortController()
   jobLoading.value = true
   try {
-    const res = await http.get(`/batch-jobs/${jobId.value}`)
+    const res = await http.get(`/batch-jobs/${jobId.value}`, { signal: jobAbort.signal })
     jobInfo.value = res.data
     const total = Number(res.data?.total || 0)
     const completed = Number(res.data?.completed || 0)
     jobPercent.value = total > 0 ? Math.round((completed / total) * 100) : 0
     if (res.data?.status === 'done') stopJobPolling()
   } catch (e) {
+    if (e?.code === 'ERR_CANCELED') return
     ElMessage.error(e.friendlyMessage || '获取任务进度失败')
   } finally {
     jobLoading.value = false
@@ -543,7 +565,7 @@ const startJobPolling = () => {
 
 const deleteUser = (id) => {
   const user = users.value.find(u => u.id === id)
-  const phone = user?.phone ? String(user.phone) : String(id)
+  const phone = user?.phone ? maskPhone(user.phone) : String(id)
   const remark = user?.remark ? String(user.remark) : ''
 
   ElMessageBox.confirm(

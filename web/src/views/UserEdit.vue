@@ -111,8 +111,30 @@
           </el-form-item>
           <el-form-item v-if="form.reportSettings.daily.enabled" label="日报预览">
             <div class="report-preview">
-              <div class="report-preview-meta">字数：{{ dailyCount }} / 1000</div>
-              <el-input v-model="reportPreview.daily" type="textarea" :rows="6" readonly resize="none" />
+              <div class="report-preview-meta">
+                <div>字数：{{ dailyCount }} / 1000</div>
+                <div class="report-preview-actions">
+                  <el-button size="small" :disabled="!isEdit" :loading="aiDailyLoading" @click="generateDailyReport">
+                    AI生成日报
+                  </el-button>
+                  <el-button
+                    size="small"
+                    type="primary"
+                    :disabled="!isEdit || !String(reportPreview.daily || '').trim()"
+                    :loading="submitDailyLoading"
+                    @click="submitDailyReport"
+                  >
+                    提交日报
+                  </el-button>
+                </div>
+              </div>
+              <el-input
+                v-model="reportPreview.daily"
+                type="textarea"
+                :rows="6"
+                resize="none"
+                placeholder="点击 AI生成日报 或手动填写后提交"
+              />
             </div>
           </el-form-item>
           
@@ -220,7 +242,11 @@ const aiTestLoading = ref(false)
 const aiTestStatus = ref('')
 const aiTestLatencyMs = ref(null)
 const addrFillLoading = ref(false)
+const aiDailyLoading = ref(false)
+const submitDailyLoading = ref(false)
 const reportPreview = reactive({ daily: '', weekly: '', monthly: '' })
+let geocodeSearchAbort = null
+let geocodeReverseAbort = null
 
 const _countText = (t) => {
   const s = String(t || '').replace(/\s+/g, '')
@@ -326,30 +352,27 @@ const applyAddressStruct = (rawAddress, opts = {}) => {
 }
 
 const updateLocation = async (lat, lng, label = '') => {
-    // 确保是数字
     lat = parseFloat(lat);
     lng = parseFloat(lng);
 
-    // 更新 Marker
     if (marker.value) {
         marker.value.setLatLng([lat, lng]);
     } else {
         marker.value = L.marker([lat, lng]).addTo(mapInstance.value);
     }
     
-    // 更新表单经纬度
     form.clockIn.location.latitude = lat.toFixed(6);
     form.clockIn.location.longitude = lng.toFixed(6);
     
-    // 如果有搜索提供的地址标签，先预填
     if (label) {
         form.clockIn.location.address = _composeAddress(String(label).split(/[·,，]/g));
         applyAddressStruct(form.clockIn.location.address, { rewriteAddress: true })
     }
     
-    // 逆地理编码获取地址信息
     try {
-        const res = await http.get('/geocode/reverse', { params: { lat, lon: lng } })
+        if (geocodeReverseAbort) geocodeReverseAbort.abort()
+        geocodeReverseAbort = new AbortController()
+        const res = await http.get('/geocode/reverse', { params: { lat, lon: lng }, signal: geocodeReverseAbort.signal })
         const payload = res.data?.result
         if (payload && payload.address) {
             const addr = payload.address;
@@ -361,13 +384,13 @@ const updateLocation = async (lat, lng, label = '') => {
             form.clockIn.location.city = city
             form.clockIn.location.area = area
             
-            // 构造详细地址
             const fullAddr = _cleanSegment(payload.display_name)
             const place = _pickFirst(payload.name, fullAddr.split(',')[0])
             form.clockIn.location.address = _composeAddress([province, city, area, place])
             applyAddressStruct(form.clockIn.location.address, { rewriteAddress: true })
         }
     } catch (err) {
+        if (err?.code === 'ERR_CANCELED') return
         console.error("逆地理编码失败", err);
         if (!label) {
              ElMessage.warning(err.response?.data?.detail || '无法自动获取详细地址，请手动填写');
@@ -392,7 +415,9 @@ const searchPlace = async () => {
         return
     }
     try {
-        const res = await http.get('/geocode/search', { params: { q } })
+        if (geocodeSearchAbort) geocodeSearchAbort.abort()
+        geocodeSearchAbort = new AbortController()
+        const res = await http.get('/geocode/search', { params: { q }, signal: geocodeSearchAbort.signal })
         const results = res.data?.results || []
         if (!Array.isArray(results) || results.length === 0) {
             ElMessage.warning('没有搜索到结果，请换一个关键词')
@@ -409,6 +434,7 @@ const searchPlace = async () => {
         }
         updateLocation(lat, lng, best.label || q)
     } catch (e) {
+        if (e?.code === 'ERR_CANCELED') return
         ElMessage.error(e.response?.data?.detail || '搜索失败，请稍后再试')
     }
 }
@@ -420,8 +446,12 @@ const initMap = () => {
   let lng = 104.0668;
   
   if (form.clockIn.location.latitude && form.clockIn.location.longitude) {
-      lat = parseFloat(form.clockIn.location.latitude);
-      lng = parseFloat(form.clockIn.location.longitude);
+      const lat2 = parseFloat(form.clockIn.location.latitude);
+      const lng2 = parseFloat(form.clockIn.location.longitude);
+      if (Number.isFinite(lat2) && Number.isFinite(lng2)) {
+        lat = lat2
+        lng = lng2
+      }
   }
 
   mapInstance.value = L.map('map').setView([lat, lng], 13);
@@ -448,8 +478,8 @@ const initMap = () => {
     }).addTo(mapInstance.value)
   }
 
-  if (form.clockIn.location.latitude && form.clockIn.location.longitude) {
-      marker.value = L.marker([lat, lng]).addTo(mapInstance.value);
+  if (Number.isFinite(lat) && Number.isFinite(lng) && form.clockIn.location.latitude && form.clockIn.location.longitude) {
+    marker.value = L.marker([lat, lng]).addTo(mapInstance.value);
   }
 
   mapInstance.value.on('click', async (e) => {
@@ -516,6 +546,13 @@ const save = async () => {
       if (payload.ai && typeof payload.ai === 'object') {
         if (!String(payload.ai.apikey || '').trim()) delete payload.ai.apikey
       }
+      if (typeof payload.phone === 'string' && payload.phone.includes('*')) delete payload.phone
+      const loc = payload?.clockIn?.location
+      if (loc && typeof loc === 'object') {
+        for (const k of ['address', 'latitude', 'longitude', 'province', 'city', 'area']) {
+          if (typeof loc[k] === 'string' && loc[k].includes('*')) delete loc[k]
+        }
+      }
     }
     if (isEdit.value) {
       await http.patch(`/users/${route.params.id}`, payload)
@@ -553,6 +590,45 @@ const testAi = async () => {
   }
 }
 
+const generateDailyReport = async () => {
+  if (!isEdit.value) return
+  aiDailyLoading.value = true
+  try {
+    const res = await http.post(`/users/${route.params.id}/reports/daily/generate`)
+    const content = res.data?.content
+    if (typeof content === 'string') {
+      reportPreview.daily = content
+    }
+    if (res.data?.already_submitted) {
+      ElMessage.warning('检测到今天可能已提交过日报，仅生成内容供参考')
+    } else {
+      ElMessage.success('已生成日报内容')
+    }
+  } catch (e) {
+    ElMessage.error(e.friendlyMessage || e.response?.data?.detail || '生成失败')
+  } finally {
+    aiDailyLoading.value = false
+  }
+}
+
+const submitDailyReport = async () => {
+  if (!isEdit.value) return
+  const content = String(reportPreview.daily || '').trim()
+  if (!content) {
+    ElMessage.warning('请先生成或填写日报内容')
+    return
+  }
+  submitDailyLoading.value = true
+  try {
+    const res = await http.post(`/users/${route.params.id}/reports/daily/submit`, { content })
+    ElMessage.success(`提交成功：${res.data?.title || '日报'}`)
+  } catch (e) {
+    ElMessage.error(e.friendlyMessage || e.response?.data?.detail || '提交失败')
+  } finally {
+    submitDailyLoading.value = false
+  }
+}
+
 const applyModelScopePreset = () => {
   form.ai.apiUrl = 'https://api-inference.modelscope.cn/v1'
   form.ai.model = 'Qwen/Qwen3-Next-80B-A3B-Instruct'
@@ -584,7 +660,7 @@ const fillFromAccountAddress = async () => {
   addrFillLoading.value = true
   try {
     const res = await http.get(`/users/${route.params.id}/account-address`)
-    const bestAddr = _pickBestAddress(res.data?.address, res.data?.addressCandidates)
+    const bestAddr = _pickBestAddress(res.data?.address, res.data?.addressCandidates, res.data?.maskedAddress, res.data?.maskedCandidates)
     if (!bestAddr) {
       ElMessage.warning('未获取到账号详细地址')
       return
@@ -604,7 +680,6 @@ const fillFromAccountAddress = async () => {
   }
 }
 
-// 监听 Tab 切换，初始化地图
 watch(activeTab, (val) => {
     if (val === 'clockin') {
         nextTick(() => {
@@ -726,6 +801,17 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.report-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 @media (max-width: 768px) {
   .map {
