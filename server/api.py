@@ -507,6 +507,7 @@ def read_user_job_info(
         "quartersIntroduce": job_info.get("quartersIntroduce"),
     }
 
+
 @router.get("/users/{user_id}/account-address")
 def read_user_account_address(
     *,
@@ -825,6 +826,7 @@ def ai_test(request: Request, req: AiTestRequest, operator: dict = Depends(get_o
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI 接口请求失败: {str(e)}")
 
+
 @router.post("/users/{user_id}/reports/daily/generate")
 def generate_daily_report(
     *,
@@ -882,6 +884,7 @@ def generate_daily_report(
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e) or "生成日报失败")
+
 
 @router.post("/users/{user_id}/reports/daily/submit")
 def submit_daily_report_manual(
@@ -948,6 +951,7 @@ def submit_daily_report_manual(
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e) or "提交日报失败")
+
 
 @router.get("/geocode/search")
 def geocode_search(q: str = Query(..., min_length=1, max_length=200), operator: dict = Depends(get_operator)):
@@ -1035,6 +1039,7 @@ def geocode_search(q: str = Query(..., min_length=1, max_length=200), operator: 
             last_err = e
             time.sleep(0.4 * (attempt + 1))
     raise HTTPException(status_code=502, detail=f"地理搜索失败: {str(last_err) if last_err else 'unknown'}")
+
 
 @router.get("/geocode/reverse")
 def geocode_reverse(
