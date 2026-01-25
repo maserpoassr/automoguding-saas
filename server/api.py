@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request   
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlmodel import Session, select
 from sqlalchemy import func
 from server.database import get_session, engine
@@ -55,7 +55,7 @@ def _is_safe_outbound_url(url: str) -> bool:
     if port != 443:
         return False
     try:
-        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM) 
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except Exception:
         return False
     for info in infos:
@@ -140,9 +140,9 @@ def _mask_clockin(clock_in: Dict[str, Any]) -> Dict[str, Any]:
         if "address" in loc:
             loc["address"] = _mask_address(loc.get("address"))
         if "latitude" in loc:
-            loc["latitude"] = _mask_number_like(loc.get("latitude"))    
+            loc["latitude"] = _mask_number_like(loc.get("latitude"))
         if "longitude" in loc:
-            loc["longitude"] = _mask_number_like(loc.get("longitude"))  
+            loc["longitude"] = _mask_number_like(loc.get("longitude"))
         if "area" in loc and loc.get("area"):
             loc["area"] = "***"
         out["location"] = loc
@@ -157,7 +157,7 @@ class ReportSubmitRequest(BaseModel):
     content: str
 
 _RATE_LIMIT_BUCKETS: Dict[str, List[float]] = {}
-_GEOCODE_CACHE: "OrderedDict[tuple, tuple[float, Any]]" = OrderedDict() 
+_GEOCODE_CACHE: "OrderedDict[tuple, tuple[float, Any]]" = OrderedDict()
 _GEOCODE_LOCK = threading.Lock()
 
 def _geocode_cache_get(key: tuple) -> Any:
@@ -182,13 +182,13 @@ def _geocode_cache_set(key: tuple, value: Any, ttl_seconds: int = 3600, maxsize:
         while len(_GEOCODE_CACHE) > int(maxsize):
             _GEOCODE_CACHE.popitem(last=False)
 
-def _rate_limit(key: str, limit: int, per_seconds: int) -> None:        
+def _rate_limit(key: str, limit: int, per_seconds: int) -> None:
     now = time.time()
     bucket = _RATE_LIMIT_BUCKETS.get(key, [])
     cutoff = now - per_seconds
     bucket = [t for t in bucket if t >= cutoff]
     if len(bucket) >= limit:
-        raise HTTPException(status_code=429, detail="操作过于频繁，请稍 后再试")
+        raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
     bucket.append(now)
     _RATE_LIMIT_BUCKETS[key] = bucket
 
@@ -204,13 +204,13 @@ def _ensure_clockin_schedule_defaults(user: User):
     weekdays = schedule.get("weekdays")
     if not isinstance(weekdays, list) or len(weekdays) == 0:
         custom_days = user.clockIn.get("customDays")
-        if isinstance(custom_days, list) and len(custom_days) > 0:      
+        if isinstance(custom_days, list) and len(custom_days) > 0:
             schedule["weekdays"] = custom_days
         else:
             schedule["weekdays"] = [1, 2, 3, 4, 5, 6, 7]
     if not schedule.get("totalDays"):
         schedule["totalDays"] = 180
-    if schedule.get("totalDays") and not schedule.get("startDate"):     
+    if schedule.get("totalDays") and not schedule.get("startDate"):
         schedule["startDate"] = datetime.date.today().strftime("%Y-%m-%d")
 
 class LoginRequest(BaseModel):
@@ -233,7 +233,7 @@ def admin_login(request: Request, req: LoginRequest):
         token = issue_token(subject=username, role=role)
         session.add(AuditLog(actor=username, action="auth.login", target_user_id=None, detail={"role": role}))
         session.commit()
-        return {"token": token, "role": role, "username": username}     
+        return {"token": token, "role": role, "username": username}
 
 class AuditLogPageResponse(BaseModel):
     items: List[Dict[str, Any]]
@@ -241,7 +241,7 @@ class AuditLogPageResponse(BaseModel):
     page: int
     pageSize: int
 
-@router.get("/audit-logs/page", response_model=AuditLogPageResponse)    
+@router.get("/audit-logs/page", response_model=AuditLogPageResponse)
 def read_audit_logs_page(
     *,
     session: Session = Depends(get_session),
@@ -289,7 +289,7 @@ class AdminUserPageResponse(BaseModel):
     page: int
     pageSize: int
 
-@router.get("/admin-users/page", response_model=AdminUserPageResponse)  
+@router.get("/admin-users/page", response_model=AdminUserPageResponse)
 def read_admin_users_page(
     *,
     session: Session = Depends(get_session),
@@ -325,7 +325,7 @@ def create_admin_user(
     admin: dict = Depends(get_admin),
     req: AdminUserCreateRequest,
 ):
-    raise HTTPException(status_code=400, detail="该管理平台仅保留管理员 账号，此功能已禁用")
+    raise HTTPException(status_code=400, detail="该管理平台仅保留管理员账号，此功能已禁用")
 
 @router.patch("/admin-users/{admin_user_id}")
 def update_admin_user(
@@ -337,12 +337,12 @@ def update_admin_user(
 ):
     user = session.get(AdminUser, admin_user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
     changed: List[str] = []
     if user.role != "admin":
-        raise HTTPException(status_code=400, detail="仅允许管理管理员账 号")
+        raise HTTPException(status_code=400, detail="仅允许管理管理员账号")
     if req.role is not None:
-        raise HTTPException(status_code=400, detail="不允许修改角色")   
+        raise HTTPException(status_code=400, detail="不允许修改角色")
     if req.enabled is not None:
         enabled = bool(req.enabled)
         if not enabled and user.role == "admin":
@@ -350,7 +350,7 @@ def update_admin_user(
                 select(func.count()).select_from(AdminUser).where((AdminUser.role == "admin") & (AdminUser.enabled == True))
             ).one()
             if enabled_admins <= 1:
-                raise HTTPException(status_code=400, detail="至少保留一 个启用的管理员")
+                raise HTTPException(status_code=400, detail="至少保留一个启用的管理员")
         user.enabled = enabled
         changed.append("enabled")
     session.add(user)
@@ -368,11 +368,11 @@ def reset_admin_user_password(
 ):
     user = session.get(AdminUser, admin_user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
     if user.role != "admin":
-        raise HTTPException(status_code=400, detail="仅允许管理管理员账 号")
+        raise HTTPException(status_code=400, detail="仅允许管理管理员账号")
     password = (req.password or "").strip()
-    if not password or len(password) < 6 or len(password) > 100:        
+    if not password or len(password) < 6 or len(password) > 100:
         raise HTTPException(status_code=400, detail="密码长度需为 6-100")
     user.password_hash = hash_password(password)
     session.add(user)
@@ -413,7 +413,7 @@ def read_users_page(
     viewer: dict = Depends(get_viewer),
     page: int = Query(1, ge=1),
     pageSize: int = Query(20, ge=1, le=200),
-    q: Optional[str] = Query(None, min_length=1, max_length=50),        
+    q: Optional[str] = Query(None, min_length=1, max_length=50),
 ):
     stmt = select(User)
     if q:
@@ -442,14 +442,14 @@ def read_users_page(
 def read_user(*, session: Session = Depends(get_session), user_id: int, viewer: dict = Depends(get_viewer)):
     user = session.get(User, user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
     return _sanitize_user_for_read(user)
 
 @router.get("/users/{user_id}/execution")
 def read_user_execution(*, session: Session = Depends(get_session), user_id: int, viewer: dict = Depends(get_viewer)):
     user = session.get(User, user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
     return {"results": user.last_execution_result or []}
 
 @router.get("/users/{user_id}/job-info")
@@ -464,9 +464,9 @@ def read_user_job_info(
     _rate_limit(f"job_info:{client_ip}:{user_id}", limit=3, per_seconds=60)
     user = session.get(User, user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
     if not (str(user.phone or "").strip()) or not (str(user.password or "").strip()):
-        raise HTTPException(status_code=400, detail="该用户未保存账号或 密码，无法自动获取岗位信息")
+        raise HTTPException(status_code=400, detail="该用户未保存账号或密码，无法自动获取岗位信息")
 
     config_data = user_to_config(user)
     config = ConfigManager(config=config_data)
@@ -520,9 +520,9 @@ def read_user_account_address(
     _rate_limit(f"account_addr:{client_ip}:{user_id}", limit=3, per_seconds=60)
     user = session.get(User, user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
     if not (str(user.phone or "").strip()) or not (str(user.password or "").strip()):
-        raise HTTPException(status_code=400, detail="该用户未保存账号或 密码，无法自动获取账号地址")
+        raise HTTPException(status_code=400, detail="该用户未保存账号或密码，无法自动获取账号地址")
 
     try:
         config_data = user_to_config(user)
@@ -534,7 +534,7 @@ def read_user_account_address(
             api_client.fetch_internship_plan()
         checkin = api_client.get_checkin_info() or {}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e) or "获取账号 地址失败")
+        raise HTTPException(status_code=400, detail=str(e) or "获取账号地址失败")
 
     candidates: List[str] = []
     for k in [
@@ -557,7 +557,7 @@ def read_user_account_address(
     if candidates:
         best = sorted(candidates, key=lambda x: len(x), reverse=True)[0]
     if not best:
-        raise HTTPException(status_code=404, detail="未获取到账号地址（ 可能该账号暂无打卡记录）")
+        raise HTTPException(status_code=404, detail="未获取到账号地址（可能该账号暂无打卡记录）")
 
     try:
         clock_in = user.clockIn if isinstance(user.clockIn, dict) else {}
@@ -584,16 +584,16 @@ def read_user_account_address(
         "address": best,
         "addressCandidates": candidates,
         "maskedAddress": _mask_address(best),
-        "maskedCandidates": [_mask_address(x) for x in candidates],     
+        "maskedCandidates": [_mask_address(x) for x in candidates],
         "checkinTime": checkin.get("attendenceTime"),
         "type": checkin.get("type"),
     }
 
 @router.patch("/users/{user_id}", response_model=UserRead)
-def update_user(*, session: Session = Depends(get_session), user_id: int, user_update: UserUpdate, operator: dict = Depends(get_operator)):     
+def update_user(*, session: Session = Depends(get_session), user_id: int, user_update: UserUpdate, operator: dict = Depends(get_operator)):
     db_user = session.get(User, user_id)
     if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
 
     user_data = user_update.dict(exclude_unset=True)
     if "phone" in user_data and isinstance(user_data.get("phone"), str) and "*" in user_data.get("phone"):
@@ -606,7 +606,7 @@ def update_user(*, session: Session = Depends(get_session), user_id: int, user_u
     if "clockIn" in user_data and isinstance(user_data.get("clockIn"), dict) and isinstance(db_user.clockIn, dict):
         upd_clock = dict(user_data.get("clockIn") or {})
         upd_loc = upd_clock.get("location")
-        cur_loc = (db_user.clockIn.get("location") or {}) if isinstance(db_user.clockIn.get("location"), dict) else {}
+        cur_loc = (db_user.clockIn.get("location" ) or {}) if isinstance(db_user.clockIn.get("location"), dict) else {}
         if isinstance(upd_loc, dict):
             loc2 = dict(upd_loc)
             for k in ["address", "latitude", "longitude", "province", "city", "area"]:
@@ -618,7 +618,7 @@ def update_user(*, session: Session = Depends(get_session), user_id: int, user_u
                         loc2.pop(k, None)
             upd_clock["location"] = loc2
         user_data["clockIn"] = upd_clock
-    if "ai" in user_data and isinstance(user_data.get("ai"), dict):     
+    if "ai" in user_data and isinstance(user_data.get("ai"), dict):
         ai_update = dict(user_data.get("ai") or {})
         if "apikey" in ai_update and not (str(ai_update.get("apikey") or "").strip()):
             ai_update.pop("apikey", None)
@@ -634,7 +634,7 @@ def update_user(*, session: Session = Depends(get_session), user_id: int, user_u
     _ensure_clockin_schedule_defaults(db_user)
 
     session.add(db_user)
-    session.add(AuditLog(actor=operator.get("sub"), action="user.update", target_user_id=user_id, detail={"fields": list(user_data.keys())}))   
+    session.add(AuditLog(actor=operator.get("sub"), action="user.update", target_user_id=user_id, detail={"fields": list(user_data.keys())}))
     session.commit()
     session.refresh(db_user)
 
@@ -648,7 +648,7 @@ def update_user(*, session: Session = Depends(get_session), user_id: int, user_u
 def delete_user(*, session: Session = Depends(get_session), user_id: int, admin: dict = Depends(get_admin)):
     user = session.get(User, user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
 
     remove_user_job(user_id)
     session.delete(user)
@@ -659,10 +659,10 @@ def delete_user(*, session: Session = Depends(get_session), user_id: int, admin:
 @router.post("/users/{user_id}/run")
 def run_user_task(*, request: Request, session: Session = Depends(get_session), user_id: int, operator: dict = Depends(get_operator)):
     client_ip = get_client_ip(request)
-    _rate_limit(f"run:{client_ip}:{user_id}", limit=2, per_seconds=60)  
-  user = session.get(User, user_id)
+    _rate_limit(f"run:{client_ip}:{user_id}", limit=2, per_seconds=60)
+    user = session.get(User, user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
 
     config_data = user_to_config(user)
     results = run_task_by_config(config_data)
@@ -696,7 +696,7 @@ class BatchRunRequest(BaseModel):
 @router.post("/users/run/batch")
 def run_users_batch(*, request: Request, req: BatchRunRequest, operator: dict = Depends(get_operator)):
     client_ip = get_client_ip(request)
-    _rate_limit(f"run_batch:{client_ip}", limit=1, per_seconds=10)      
+    _rate_limit(f"run_batch:{client_ip}", limit=1, per_seconds=10)
     ids = [int(x) for x in (req.ids or []) if int(x) > 0]
     if not ids:
         raise HTTPException(status_code=400, detail="请选择要运行的账号")
@@ -718,7 +718,7 @@ def run_users_batch(*, request: Request, req: BatchRunRequest, operator: dict = 
 def read_batch_job(*, session: Session = Depends(get_session), job_id: int = 0, viewer: dict = Depends(get_viewer)):
     job = session.get(BatchJob, job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")    
+        raise HTTPException(status_code=404, detail="Job not found")
     running = session.exec(
         select(func.count()).select_from(BatchJobItem).where((BatchJobItem.job_id == job_id) & (BatchJobItem.status == "running"))
     ).one()
@@ -753,7 +753,7 @@ def read_batch_job(*, session: Session = Depends(get_session), job_id: int = 0, 
 def pause_batch_job(*, session: Session = Depends(get_session), job_id: int, operator: dict = Depends(get_operator)):
     job = session.get(BatchJob, job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")    
+        raise HTTPException(status_code=404, detail="Job not found")
     job.paused = True
     session.add(job)
     session.add(AuditLog(actor=operator.get("sub"), action="batch.pause", target_user_id=None, detail={"job_id": job_id}))
@@ -764,7 +764,7 @@ def pause_batch_job(*, session: Session = Depends(get_session), job_id: int, ope
 def resume_batch_job(*, session: Session = Depends(get_session), job_id: int, operator: dict = Depends(get_operator)):
     job = session.get(BatchJob, job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")    
+        raise HTTPException(status_code=404, detail="Job not found")
     job.paused = False
     if job.status in ["paused", "queued"]:
         job.status = "queued"
@@ -777,7 +777,7 @@ def resume_batch_job(*, session: Session = Depends(get_session), job_id: int, op
 def cancel_batch_job(*, session: Session = Depends(get_session), job_id: int, operator: dict = Depends(get_operator)):
     job = session.get(BatchJob, job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")    
+        raise HTTPException(status_code=404, detail="Job not found")
     job.cancel_requested = True
     session.add(job)
     session.add(AuditLog(actor=operator.get("sub"), action="batch.cancel", target_user_id=None, detail={"job_id": job_id}))
@@ -787,7 +787,7 @@ def cancel_batch_job(*, session: Session = Depends(get_session), job_id: int, op
 @router.post("/ai/test")
 def ai_test(request: Request, req: AiTestRequest, operator: dict = Depends(get_operator)):
     client_ip = get_client_ip(request)
-    _rate_limit(f"ai_test:{client_ip}", limit=5, per_seconds=60)        
+    _rate_limit(f"ai_test:{client_ip}", limit=5, per_seconds=60)
     api_url = (req.apiUrl or "").strip()
     api_key = (req.apikey or "").strip()
     model = (req.model or "").strip()
@@ -813,14 +813,14 @@ def ai_test(request: Request, req: AiTestRequest, operator: dict = Depends(get_o
                 err = resp.json()
             except Exception:
                 err = {"error": resp.text}
-            raise HTTPException(status_code=502, detail=f"AI 接口返回错 误: {resp.status_code} {err}")
+            raise HTTPException(status_code=502, detail=f"AI 接口返回错误: {resp.status_code} {err}")
         data = resp.json()
         content = (
             (data.get("choices") or [{}])[0].get("message", {}).get("content")
             if isinstance(data, dict)
             else None
         )
-        return {"ok": True, "latency_ms": latency_ms, "reply": content} 
+        return {"ok": True, "latency_ms": latency_ms, "reply": content}
     except HTTPException:
         raise
     except Exception as e:
@@ -839,9 +839,9 @@ def generate_daily_report(
     _rate_limit(f"daily_gen:{client_ip}:{user_id}", limit=3, per_seconds=60)
     user = session.get(User, user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
     if not (str(user.phone or "").strip()) or not (str(user.password or "").strip()):
-        raise HTTPException(status_code=400, detail="该用户未保存账号或 密码，无法生成日报")
+        raise HTTPException(status_code=400, detail="该用户未保存账号或密码，无法生成日报")
 
     config_data = user_to_config(user)
     config = ConfigManager(config=config_data)
@@ -849,9 +849,9 @@ def generate_daily_report(
 
     ai_cfg = config.get_value("config.ai")
     if not isinstance(ai_cfg, dict):
-        raise HTTPException(status_code=400, detail="未配置 AI 参数")   
+        raise HTTPException(status_code=400, detail="未配置 AI 参数")
     if not (str(ai_cfg.get("apikey") or "").strip()) or not (str(ai_cfg.get("apiUrl") or "").strip()) or not (str(ai_cfg.get("model") or "").strip()):
-        raise HTTPException(status_code=400, detail="请先在 AI 设置中填 写 API URL、API Key 和 Model")
+        raise HTTPException(status_code=400, detail="请先在 AI 设置中填写 API URL、API Key 和 Model")
 
     try:
         if not config.get_value("userInfo.token"):
@@ -859,7 +859,7 @@ def generate_daily_report(
         if config.get_value("userInfo.userType") != "teacher" and not config.get_value("planInfo.planId"):
             api_client.fetch_internship_plan()
 
-        submitted = api_client.get_submitted_reports_info("day") or {}  
+        submitted = api_client.get_submitted_reports_info("day") or {}
         data = submitted.get("data", []) if isinstance(submitted, dict) else []
         count = (submitted.get("flag", 0) if isinstance(submitted, dict) else 0) + 1
         title = f"第{count}天日报"
@@ -883,7 +883,7 @@ def generate_daily_report(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e) or "生成日报 失败")
+        raise HTTPException(status_code=400, detail=str(e) or "生成日报失败")
 
 
 @router.post("/users/{user_id}/reports/daily/submit")
@@ -899,13 +899,13 @@ def submit_daily_report_manual(
     _rate_limit(f"daily_submit:{client_ip}:{user_id}", limit=3, per_seconds=60)
     content = (req.content or "").strip()
     if not content:
-        raise HTTPException(status_code=400, detail="日报内容不能为空") 
+        raise HTTPException(status_code=400, detail="日报内容不能为空")
 
     user = session.get(User, user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")   
+        raise HTTPException(status_code=404, detail="User not found")
     if not (str(user.phone or "").strip()) or not (str(user.password or "").strip()):
-        raise HTTPException(status_code=400, detail="该用户未保存账号或 密码，无法提交日报")
+        raise HTTPException(status_code=400, detail="该用户未保存账号或密码，无法提交日报")
 
     config_data = user_to_config(user)
     config = ConfigManager(config=config_data)
@@ -917,7 +917,7 @@ def submit_daily_report_manual(
         if config.get_value("userInfo.userType") != "teacher" and not config.get_value("planInfo.planId"):
             api_client.fetch_internship_plan()
 
-        submitted = api_client.get_submitted_reports_info("day") or {}  
+        submitted = api_client.get_submitted_reports_info("day") or {}
         data = submitted.get("data", []) if isinstance(submitted, dict) else []
         current_time = datetime.datetime.now()
         if isinstance(data, list) and data:
@@ -927,7 +927,7 @@ def submit_daily_report_manual(
                 try:
                     last_time = datetime.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
                     if last_time.date() == current_time.date():
-                        raise HTTPException(status_code=400, detail="今 天已经提交过日报")
+                        raise HTTPException(status_code=400, detail="今天已经提交过日报")
                 except HTTPException:
                     raise
                 except Exception:
@@ -942,7 +942,7 @@ def submit_daily_report_manual(
             "attachments": "",
             "reportType": "day",
             "jobId": job_info.get("jobId", None),
-            "reportTime": current_time.strftime("%Y-%m-%d %H:%M:%S"),   
+            "reportTime": current_time.strftime("%Y-%m-%d %H:%M:%S"),
             "formFieldDtoList": api_client.get_from_info(7),
         }
         api_client.submit_report(report_info)
@@ -950,12 +950,12 @@ def submit_daily_report_manual(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e) or "提交日报 失败")
+        raise HTTPException(status_code=400, detail=str(e) or "提交日报失败")
 
 
 @router.get("/geocode/search")
 def geocode_search(q: str = Query(..., min_length=1, max_length=200), operator: dict = Depends(get_operator)):
-    provider = (os.getenv("GEOCODE_PROVIDER") or "").strip().lower()    
+    provider = (os.getenv("GEOCODE_PROVIDER") or "").strip().lower()
     amap_key = (os.getenv("AMAP_KEY") or "").strip()
     if not provider:
         provider = "amap" if amap_key else "osm"
@@ -1019,7 +1019,7 @@ def geocode_search(q: str = Query(..., min_length=1, max_length=200), operator: 
                 bounds: Optional[List[List[float]]] = None
                 if isinstance(bbox, list) and len(bbox) == 4:
                     try:
-                        south, north, west, east = map(float, bbox)     
+                        south, north, west, east = map(float, bbox)
                         bounds = [[south, west], [north, east]]
                     except Exception:
                         bounds = None
@@ -1027,7 +1027,7 @@ def geocode_search(q: str = Query(..., min_length=1, max_length=200), operator: 
                     {
                         "x": lon,
                         "y": lat,
-                        "label": item.get("display_name") or q2,        
+                        "label": item.get("display_name") or q2,
                         "bounds": bounds,
                         "raw": item,
                     }
@@ -1047,7 +1047,7 @@ def geocode_reverse(
     lon: float = Query(...),
     operator: dict = Depends(get_operator),
 ):
-    provider = (os.getenv("GEOCODE_PROVIDER") or "").strip().lower()    
+    provider = (os.getenv("GEOCODE_PROVIDER") or "").strip().lower()
     amap_key = (os.getenv("AMAP_KEY") or "").strip()
     if not provider:
         provider = "amap" if amap_key else "osm"
@@ -1072,7 +1072,7 @@ def geocode_reverse(
             resp.raise_for_status()
             data = resp.json() or {}
             regeocode = data.get("regeocode") or {}
-            formatted = regeocode.get("formatted_address") or ""        
+            formatted = regeocode.get("formatted_address") or ""
             comp = regeocode.get("addressComponent") or {}
             province = comp.get("province") or ""
             city = comp.get("city") or ""
