@@ -38,6 +38,21 @@ jobs:
             type=sha,format=long
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Read version tag
+        id: version
+        shell: bash
+        run: |
+          if [ -f VERSION ]; then
+            v="$(cat VERSION | tr -d '\r\n' | xargs)"
+            if [ -n "$v" ]; then
+              echo "image_tag=ghcr.io/${{ github.repository }}:$v" >> "$GITHUB_OUTPUT"
+            else
+              echo "image_tag=" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "image_tag=" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
         with:
@@ -50,7 +65,9 @@ jobs:
           context: .
           file: ./Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ steps.version.outputs.image_tag }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

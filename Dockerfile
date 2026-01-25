@@ -2,7 +2,6 @@
 FROM node:20-alpine AS frontend-build
 WORKDIR /app
 
-# 优先复制 package.json 利用缓存
 COPY web/package*.json ./web/
 RUN cd web && npm ci
 
@@ -18,22 +17,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TZ=Asia/Shanghai
 
-# 安装系统依赖（合并层）
+# 安装系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# 优先安装 Python 依赖利用缓存
 COPY server/requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-# 复制应用代码
 COPY server/ ./server/
 COPY --from=frontend-build /app/web/dist ./web/dist
 
-# 预下载模型（可选构建参数）
 ARG DOWNLOAD_MODELS=1
 RUN if [ "$DOWNLOAD_MODELS" = "1" ]; then \
       python -c "from server.util.CaptchaUtils import ensure_model_exists, MODEL_URLS; [ensure_model_exists(k,v) for k,v in MODEL_URLS.items()]" ; \
