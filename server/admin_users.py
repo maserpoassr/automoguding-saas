@@ -9,47 +9,40 @@ def ensure_seed_admin_users() -> None:
 
     admin_user = (os.getenv("ADMIN_USERNAME") or "admin").strip()
     admin_pass = (os.getenv("ADMIN_PASSWORD") or "admin123456").strip()
-    operator_user = (os.getenv("OPERATOR_USERNAME") or "operator").strip()
-    operator_pass = (os.getenv("OPERATOR_PASSWORD") or "operator123456").strip()
-    viewer_user = (os.getenv("VIEWER_USERNAME") or "viewer").strip()
-    viewer_pass = (os.getenv("VIEWER_PASSWORD") or "viewer123456").strip()
-
-    seeds = [
-        (admin_user, admin_pass, "admin"),
-        (operator_user, operator_pass, "operator"),
-        (viewer_user, viewer_pass, "viewer"),
-    ]
 
     with Session(engine) as session:
         has_any = session.exec(select(AdminUser).limit(1)).first() is not None
-        if app_env in ["prod", "production"] and has_any:
-            return
         if app_env in ["prod", "production"]:
             if os.getenv("ADMIN_USERNAME") is None or os.getenv("ADMIN_PASSWORD") is None:
                 raise RuntimeError("生产环境必须设置 ADMIN_USERNAME / ADMIN_PASSWORD")
-            if os.getenv("OPERATOR_USERNAME") is None or os.getenv("OPERATOR_PASSWORD") is None:
-                raise RuntimeError("生产环境必须设置 OPERATOR_USERNAME / OPERATOR_PASSWORD")
-            if os.getenv("VIEWER_USERNAME") is None or os.getenv("VIEWER_PASSWORD") is None:
-                raise RuntimeError("生产环境必须设置 VIEWER_USERNAME / VIEWER_PASSWORD")
-        for username, password, role in seeds:
-            if not username or not password:
-                continue
-            existing = session.exec(select(AdminUser).where(AdminUser.username == username)).first()
-            if existing:
-                if not existing.role:
-                    existing.role = role
-                    session.add(existing)
-                    session.commit()
-                continue
-            session.add(
-                AdminUser(
-                    username=username,
-                    password_hash=hash_password(password),
-                    role=role,
-                    enabled=True,
-                )
-            )
-            session.commit()
-            session.add(AuditLog(actor="system", action="admin_user.seed", target_user_id=None, detail={"username": username, "role": role}))
-            session.commit()
 
+        if admin_user and admin_pass and not (app_env in ["prod", "production"] and has_any):
+            existing = session.exec(select(AdminUser).where(AdminUser.username == admin_user)).first()
+            if existing:
+                if existing.role != "admin":
+                    existing.role = "admin"
+                if existing.enabled is not True:
+                    existing.enabled = True
+                session.add(existing)
+            else:
+                session.add(
+                    AdminUser(
+                        username=admin_user,
+                        password_hash=hash_password(admin_pass),
+                        role="admin",
+                        enabled=True,
+                    )
+                )
+            session.add(AuditLog(actor="system", action="admin_user.seed", target_user_id=None, detail={"username": admin_user, "role": "admin"}))
+
+        others = session.exec(select(AdminUser).where(AdminUser.role != "admin")).all()
+        disabled = 0
+        for u in others:
+            if u.enabled:
+                u.enabled = False
+                session.add(u)
+                disabled += 1
+        if disabled:
+            session.add(AuditLog(actor="system", action="admin_user.disable_non_admin", target_user_id=None, detail={"count": disabled}))
+
+        session.commit()

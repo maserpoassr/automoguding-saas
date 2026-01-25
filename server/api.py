@@ -7,6 +7,7 @@ from server.scheduler import add_user_job, remove_user_job, user_to_config
 from server.task_runner import run_task_by_config
 from server.util.Config import ConfigManager
 from server.coreApi.MainLogicApi import ApiClient
+from server.coreApi.AiServiceClient import generate_article
 from typing import List, Any, Dict, Optional
 import datetime
 import requests
@@ -16,6 +17,9 @@ import time
 import os
 import ipaddress
 import socket
+import re
+import threading
+from collections import OrderedDict
 from server.auth import get_admin, get_operator, get_viewer, issue_token, get_client_ip, verify_password, hash_password
 from server.secret_store import encrypt_secret
 
@@ -63,6 +67,13 @@ def _is_safe_outbound_url(url: str) -> bool:
 def _sanitize_user_for_read(user: User) -> Dict[str, Any]:
     data = UserRead.model_validate(user).model_dump()
     data["password"] = ""
+    phone = data.get("phone")
+    if isinstance(phone, str):
+        data["phone"] = _mask_phone(phone)
+    clock_in = data.get("clockIn")
+    if isinstance(clock_in, dict):
+        clock_in2 = _mask_clockin(clock_in)
+        data["clockIn"] = clock_in2
     ai = data.get("ai")
     if isinstance(ai, dict):
         ai2 = dict(ai)
@@ -71,12 +82,105 @@ def _sanitize_user_for_read(user: User) -> Dict[str, Any]:
         data["ai"] = ai2
     return data
 
+def _mask_phone(value: str) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    digits = re.sub(r"\D", "", s)
+    if len(digits) >= 4:
+        last4 = digits[-4:]
+        return "********" + last4
+    return "*" * max(1, len(digits))
+
+def _mask_number_like(value: Any) -> Any:
+    if value is None:
+        return value
+    s = str(value).strip()
+    if not s:
+        return value
+    sign = ""
+    if s[0] in ["+", "-"]:
+        sign = s[0]
+        s = s[1:]
+    digits = [c for c in s if c.isdigit()]
+    if not digits:
+        return value
+    first = digits[0]
+    masked_len = max(1, len(digits) - 1)
+    return f"{sign}{first}{'*' * masked_len}"
+
+def _mask_address(value: Any) -> Any:
+    if value is None:
+        return value
+    s = str(value).strip()
+    if not s:
+        return value
+    parts = [p.strip() for p in re.split(r"\s*[·,/，,]\s*", s) if p and p.strip()]
+    if len(parts) >= 2:
+        return f"{parts[0]}·{parts[1]}·***"
+    m = re.search(r"(省|自治区|特别行政区)", s)
+    if m:
+        prov_end = m.end()
+        rest = s[prov_end:]
+        m2 = re.search(r"(市|州|盟|地区)", rest)
+        if m2:
+            city_end = prov_end + m2.end()
+            return f"{s[:city_end]}·***"
+        return f"{s[:prov_end]}·***"
+    m3 = re.search(r"市", s)
+    if m3:
+        return f"{s[:m3.end()]}·***"
+    return "***"
+
+def _mask_clockin(clock_in: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(clock_in)
+    location = out.get("location")
+    if isinstance(location, dict):
+        loc = dict(location)
+        if "address" in loc:
+            loc["address"] = _mask_address(loc.get("address"))
+        if "latitude" in loc:
+            loc["latitude"] = _mask_number_like(loc.get("latitude"))
+        if "longitude" in loc:
+            loc["longitude"] = _mask_number_like(loc.get("longitude"))
+        if "area" in loc and loc.get("area"):
+            loc["area"] = "***"
+        out["location"] = loc
+    return out
+
 class AiTestRequest(BaseModel):
     apiUrl: str
     apikey: str
     model: str
 
+class ReportSubmitRequest(BaseModel):
+    content: str
+
 _RATE_LIMIT_BUCKETS: Dict[str, List[float]] = {}
+_GEOCODE_CACHE: "OrderedDict[tuple, tuple[float, Any]]" = OrderedDict()
+_GEOCODE_LOCK = threading.Lock()
+
+def _geocode_cache_get(key: tuple) -> Any:
+    now = time.time()
+    with _GEOCODE_LOCK:
+        hit = _GEOCODE_CACHE.get(key)
+        if not hit:
+            return None
+        exp, value = hit
+        if exp <= now:
+            _GEOCODE_CACHE.pop(key, None)
+            return None
+        _GEOCODE_CACHE.move_to_end(key)
+        return value
+
+def _geocode_cache_set(key: tuple, value: Any, ttl_seconds: int = 3600, maxsize: int = 800) -> None:
+    now = time.time()
+    exp = now + int(ttl_seconds)
+    with _GEOCODE_LOCK:
+        _GEOCODE_CACHE[key] = (exp, value)
+        _GEOCODE_CACHE.move_to_end(key)
+        while len(_GEOCODE_CACHE) > int(maxsize):
+            _GEOCODE_CACHE.popitem(last=False)
 
 def _rate_limit(key: str, limit: int, per_seconds: int) -> None:
     now = time.time()
@@ -194,7 +298,7 @@ def read_admin_users_page(
     pageSize: int = Query(20, ge=1, le=200),
     q: Optional[str] = Query(None, max_length=60),
 ):
-    stmt = select(AdminUser)
+    stmt = select(AdminUser).where(AdminUser.role == "admin")
     if q:
         qq = q.strip()
         stmt = stmt.where(AdminUser.username.contains(qq))
@@ -221,25 +325,7 @@ def create_admin_user(
     admin: dict = Depends(get_admin),
     req: AdminUserCreateRequest,
 ):
-    username = (req.username or "").strip()
-    password = (req.password or "").strip()
-    role = (req.role or "viewer").strip()
-    if role not in ["admin", "operator", "viewer"]:
-        raise HTTPException(status_code=400, detail="无效角色")
-    if not username or len(username) < 2 or len(username) > 30:
-        raise HTTPException(status_code=400, detail="用户名长度需为 2-30")
-    if not password or len(password) < 6 or len(password) > 100:
-        raise HTTPException(status_code=400, detail="密码长度需为 6-100")
-    exists = session.exec(select(AdminUser).where(AdminUser.username == username)).first()
-    if exists:
-        raise HTTPException(status_code=400, detail="用户名已存在")
-    user = AdminUser(username=username, password_hash=hash_password(password), role=role, enabled=True)
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    session.add(AuditLog(actor=admin.get("sub"), action="admin_user.create", target_user_id=None, detail={"username": username, "role": role}))
-    session.commit()
-    return {"ok": True, "id": user.id}
+    raise HTTPException(status_code=400, detail="该管理平台仅保留管理员账号，此功能已禁用")
 
 @router.patch("/admin-users/{admin_user_id}")
 def update_admin_user(
@@ -253,12 +339,10 @@ def update_admin_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     changed: List[str] = []
+    if user.role != "admin":
+        raise HTTPException(status_code=400, detail="仅允许管理管理员账号")
     if req.role is not None:
-        role = (req.role or "").strip()
-        if role not in ["admin", "operator", "viewer"]:
-            raise HTTPException(status_code=400, detail="无效角色")
-        user.role = role
-        changed.append("role")
+        raise HTTPException(status_code=400, detail="不允许修改角色")
     if req.enabled is not None:
         enabled = bool(req.enabled)
         if not enabled and user.role == "admin":
@@ -270,7 +354,6 @@ def update_admin_user(
         user.enabled = enabled
         changed.append("enabled")
     session.add(user)
-    session.commit()
     session.add(AuditLog(actor=admin.get("sub"), action="admin_user.update", target_user_id=None, detail={"id": admin_user_id, "fields": changed}))
     session.commit()
     return {"ok": True}
@@ -286,12 +369,13 @@ def reset_admin_user_password(
     user = session.get(AdminUser, admin_user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if user.role != "admin":
+        raise HTTPException(status_code=400, detail="仅允许管理管理员账号")
     password = (req.password or "").strip()
     if not password or len(password) < 6 or len(password) > 100:
         raise HTTPException(status_code=400, detail="密码长度需为 6-100")
     user.password_hash = hash_password(password)
     session.add(user)
-    session.commit()
     session.add(AuditLog(actor=admin.get("sub"), action="admin_user.reset_password", target_user_id=None, detail={"id": admin_user_id, "username": user.username}))
     session.commit()
     return {"ok": True}
@@ -302,12 +386,12 @@ def create_user(*, session: Session = Depends(get_session), user: UserCreate, op
     db_user.password = encrypt_secret(db_user.password)
     _ensure_clockin_schedule_defaults(db_user)
     session.add(db_user)
+    session.flush()
+    session.add(AuditLog(actor=operator.get("sub"), action="user.create", target_user_id=db_user.id, detail={"phone": db_user.phone}))
     session.commit()
     session.refresh(db_user)
     if db_user.enable_clockin:
         add_user_job(db_user)
-    session.add(AuditLog(actor=operator.get("sub"), action="user.create", target_user_id=db_user.id, detail={"phone": db_user.phone}))
-    session.commit()
     return _sanitize_user_for_read(db_user)
 
 @router.get("/users", response_model=List[UserRead])
@@ -343,7 +427,7 @@ def read_users_page(
     items = [
         UserListRead(
             id=u.id,
-            phone=u.phone,
+            phone=_mask_phone(u.phone),
             remark=u.remark,
             enable_clockin=u.enable_clockin,
             last_run_time=u.last_run_time,
@@ -423,7 +507,6 @@ def read_user_job_info(
         "quartersIntroduce": job_info.get("quartersIntroduce"),
     }
 
-
 @router.get("/users/{user_id}/account-address")
 def read_user_account_address(
     *,
@@ -475,10 +558,32 @@ def read_user_account_address(
     if not best:
         raise HTTPException(status_code=404, detail="未获取到账号地址（可能该账号暂无打卡记录）")
 
+    try:
+        clock_in = user.clockIn if isinstance(user.clockIn, dict) else {}
+        loc = clock_in.get("location") if isinstance(clock_in.get("location"), dict) else {}
+        loc2 = dict(loc)
+        loc2["address"] = best
+        parts = [p.strip() for p in re.split(r"\s*[·,/，,]\s*", str(best)) if p and p.strip()]
+        if len(parts) >= 1 and not loc2.get("province"):
+            loc2["province"] = parts[0]
+        if len(parts) >= 2 and not loc2.get("city"):
+            loc2["city"] = parts[1]
+        if len(parts) >= 3 and not loc2.get("area"):
+            loc2["area"] = parts[2]
+        clock_in2 = dict(clock_in)
+        clock_in2["location"] = loc2
+        user.clockIn = clock_in2
+        session.add(user)
+        session.commit()
+    except Exception:
+        session.rollback()
+
     return {
         "ok": True,
         "address": best,
         "addressCandidates": candidates,
+        "maskedAddress": _mask_address(best),
+        "maskedCandidates": [_mask_address(x) for x in candidates],
         "checkinTime": checkin.get("attendenceTime"),
         "type": checkin.get("type"),
     }
@@ -488,13 +593,30 @@ def update_user(*, session: Session = Depends(get_session), user_id: int, user_u
     db_user = session.get(User, user_id)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     user_data = user_update.dict(exclude_unset=True)
+    if "phone" in user_data and isinstance(user_data.get("phone"), str) and "*" in user_data.get("phone"):
+        user_data.pop("phone", None)
     if "password" in user_data:
         if not (str(user_data.get("password") or "").strip()):
             user_data.pop("password", None)
         else:
             user_data["password"] = encrypt_secret(str(user_data.get("password") or ""))
+    if "clockIn" in user_data and isinstance(user_data.get("clockIn"), dict) and isinstance(db_user.clockIn, dict):
+        upd_clock = dict(user_data.get("clockIn") or {})
+        upd_loc = upd_clock.get("location")
+        cur_loc = (db_user.clockIn.get("location") or {}) if isinstance(db_user.clockIn.get("location"), dict) else {}
+        if isinstance(upd_loc, dict):
+            loc2 = dict(upd_loc)
+            for k in ["address", "latitude", "longitude", "province", "city", "area"]:
+                v = loc2.get(k)
+                if isinstance(v, str) and "*" in v:
+                    if k in cur_loc:
+                        loc2[k] = cur_loc.get(k)
+                    else:
+                        loc2.pop(k, None)
+            upd_clock["location"] = loc2
+        user_data["clockIn"] = upd_clock
     if "ai" in user_data and isinstance(user_data.get("ai"), dict):
         ai_update = dict(user_data.get("ai") or {})
         if "apikey" in ai_update and not (str(ai_update.get("apikey") or "").strip()):
@@ -509,17 +631,15 @@ def update_user(*, session: Session = Depends(get_session), user_id: int, user_u
     for key, value in user_data.items():
         setattr(db_user, key, value)
     _ensure_clockin_schedule_defaults(db_user)
-        
+
     session.add(db_user)
+    session.add(AuditLog(actor=operator.get("sub"), action="user.update", target_user_id=user_id, detail={"fields": list(user_data.keys())}))
     session.commit()
     session.refresh(db_user)
-    
-    # 更新调度任务
+
     remove_user_job(user_id)
     if db_user.enable_clockin:
         add_user_job(db_user)
-    session.add(AuditLog(actor=operator.get("sub"), action="user.update", target_user_id=user_id, detail={"fields": list(user_data.keys())}))
-    session.commit()
 
     return _sanitize_user_for_read(db_user)
 
@@ -528,10 +648,9 @@ def delete_user(*, session: Session = Depends(get_session), user_id: int, admin:
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     remove_user_job(user_id)
     session.delete(user)
-    session.commit()
     session.add(AuditLog(actor=admin.get("sub"), action="user.delete", target_user_id=user_id, detail={}))
     session.commit()
     return {"ok": True}
@@ -543,10 +662,10 @@ def run_user_task(*, request: Request, session: Session = Depends(get_session), 
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     config_data = user_to_config(user)
     results = run_task_by_config(config_data)
-    
+
     user.last_run_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     status = "Success"
     for r in results:
@@ -560,14 +679,13 @@ def run_user_task(*, request: Request, session: Session = Depends(get_session), 
             log_summary.append(f"{r.get('task_type')}: {r.get('message')}")
     if log_summary:
         user.logs = log_summary
-    
+
     user.last_execution_result = results
-        
+
+    session.add(AuditLog(actor=operator.get("sub"), action="user.run", target_user_id=user_id, detail={"status": status}))
     session.add(user)
     session.commit()
-    session.add(AuditLog(actor=operator.get("sub"), action="user.run", target_user_id=user_id, detail={"status": status}))
-    session.commit()
-    
+
     return {"results": results}
 
 class BatchRunRequest(BaseModel):
@@ -587,11 +705,9 @@ def run_users_batch(*, request: Request, req: BatchRunRequest, operator: dict = 
     with Session(engine) as session:
         job = BatchJob(created_by=operator.get("sub"), total=len(ids), concurrency=concurrency, user_ids=ids, status="queued")
         session.add(job)
-        session.commit()
-        session.refresh(job)
-        for uid in ids:
-            session.add(BatchJobItem(job_id=job.id, user_id=uid, status="queued"))
-        session.commit()
+        session.flush()
+        items = [BatchJobItem(job_id=job.id, user_id=uid, status="queued") for uid in ids]
+        session.add_all(items)
         session.add(AuditLog(actor=operator.get("sub"), action="batch.enqueue", target_user_id=None, detail={"job_id": job.id, "total": len(ids), "concurrency": concurrency}))
         session.commit()
         job_id = job.id
@@ -639,7 +755,6 @@ def pause_batch_job(*, session: Session = Depends(get_session), job_id: int, ope
         raise HTTPException(status_code=404, detail="Job not found")
     job.paused = True
     session.add(job)
-    session.commit()
     session.add(AuditLog(actor=operator.get("sub"), action="batch.pause", target_user_id=None, detail={"job_id": job_id}))
     session.commit()
     return {"ok": True}
@@ -653,7 +768,6 @@ def resume_batch_job(*, session: Session = Depends(get_session), job_id: int, op
     if job.status in ["paused", "queued"]:
         job.status = "queued"
     session.add(job)
-    session.commit()
     session.add(AuditLog(actor=operator.get("sub"), action="batch.resume", target_user_id=None, detail={"job_id": job_id}))
     session.commit()
     return {"ok": True}
@@ -665,7 +779,6 @@ def cancel_batch_job(*, session: Session = Depends(get_session), job_id: int, op
         raise HTTPException(status_code=404, detail="Job not found")
     job.cancel_requested = True
     session.add(job)
-    session.commit()
     session.add(AuditLog(actor=operator.get("sub"), action="batch.cancel", target_user_id=None, detail={"job_id": job_id}))
     session.commit()
     return {"ok": True}
@@ -712,6 +825,129 @@ def ai_test(request: Request, req: AiTestRequest, operator: dict = Depends(get_o
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI 接口请求失败: {str(e)}")
 
+@router.post("/users/{user_id}/reports/daily/generate")
+def generate_daily_report(
+    *,
+    request: Request,
+    session: Session = Depends(get_session),
+    user_id: int,
+    operator: dict = Depends(get_operator),
+):
+    client_ip = get_client_ip(request)
+    _rate_limit(f"daily_gen:{client_ip}:{user_id}", limit=3, per_seconds=60)
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not (str(user.phone or "").strip()) or not (str(user.password or "").strip()):
+        raise HTTPException(status_code=400, detail="该用户未保存账号或密码，无法生成日报")
+
+    config_data = user_to_config(user)
+    config = ConfigManager(config=config_data)
+    api_client = ApiClient(config)
+
+    ai_cfg = config.get_value("config.ai")
+    if not isinstance(ai_cfg, dict):
+        raise HTTPException(status_code=400, detail="未配置 AI 参数")
+    if not (str(ai_cfg.get("apikey") or "").strip()) or not (str(ai_cfg.get("apiUrl") or "").strip()) or not (str(ai_cfg.get("model") or "").strip()):
+        raise HTTPException(status_code=400, detail="请先在 AI 设置中填写 API URL、API Key 和 Model")
+
+    try:
+        if not config.get_value("userInfo.token"):
+            api_client.login()
+        if config.get_value("userInfo.userType") != "teacher" and not config.get_value("planInfo.planId"):
+            api_client.fetch_internship_plan()
+
+        submitted = api_client.get_submitted_reports_info("day") or {}
+        data = submitted.get("data", []) if isinstance(submitted, dict) else []
+        count = (submitted.get("flag", 0) if isinstance(submitted, dict) else 0) + 1
+        title = f"第{count}天日报"
+
+        already_submitted = False
+        current_time = datetime.datetime.now()
+        if isinstance(data, list) and data:
+            last = data[0]
+            ts = last.get("createTime")
+            if isinstance(ts, str):
+                try:
+                    last_time = datetime.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                    if last_time.date() == current_time.date():
+                        already_submitted = True
+                except Exception:
+                    pass
+
+        job_info = api_client.get_job_info()
+        content = generate_article(config, title, job_info, config.get_value("planInfo.planPaper.dayPaperNum"))
+        return {"ok": True, "title": title, "content": content, "already_submitted": already_submitted}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e) or "生成日报失败")
+
+@router.post("/users/{user_id}/reports/daily/submit")
+def submit_daily_report_manual(
+    *,
+    request: Request,
+    session: Session = Depends(get_session),
+    user_id: int,
+    req: ReportSubmitRequest,
+    operator: dict = Depends(get_operator),
+):
+    client_ip = get_client_ip(request)
+    _rate_limit(f"daily_submit:{client_ip}:{user_id}", limit=3, per_seconds=60)
+    content = (req.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="日报内容不能为空")
+
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not (str(user.phone or "").strip()) or not (str(user.password or "").strip()):
+        raise HTTPException(status_code=400, detail="该用户未保存账号或密码，无法提交日报")
+
+    config_data = user_to_config(user)
+    config = ConfigManager(config=config_data)
+    api_client = ApiClient(config)
+
+    try:
+        if not config.get_value("userInfo.token"):
+            api_client.login()
+        if config.get_value("userInfo.userType") != "teacher" and not config.get_value("planInfo.planId"):
+            api_client.fetch_internship_plan()
+
+        submitted = api_client.get_submitted_reports_info("day") or {}
+        data = submitted.get("data", []) if isinstance(submitted, dict) else []
+        current_time = datetime.datetime.now()
+        if isinstance(data, list) and data:
+            last = data[0]
+            ts = last.get("createTime")
+            if isinstance(ts, str):
+                try:
+                    last_time = datetime.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                    if last_time.date() == current_time.date():
+                        raise HTTPException(status_code=400, detail="今天已经提交过日报")
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass
+
+        count = (submitted.get("flag", 0) if isinstance(submitted, dict) else 0) + 1
+        title = f"第{count}天日报"
+        job_info = api_client.get_job_info()
+        report_info = {
+            "title": title,
+            "content": content,
+            "attachments": "",
+            "reportType": "day",
+            "jobId": job_info.get("jobId", None),
+            "reportTime": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "formFieldDtoList": api_client.get_from_info(7),
+        }
+        api_client.submit_report(report_info)
+        return {"ok": True, "title": title, "submitted_at": report_info["reportTime"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e) or "提交日报失败")
 
 @router.get("/geocode/search")
 def geocode_search(q: str = Query(..., min_length=1, max_length=200), operator: dict = Depends(get_operator)):
@@ -719,12 +955,17 @@ def geocode_search(q: str = Query(..., min_length=1, max_length=200), operator: 
     amap_key = (os.getenv("AMAP_KEY") or "").strip()
     if not provider:
         provider = "amap" if amap_key else "osm"
+    q2 = (q or "").strip()
+    cache_key = ("search", provider, q2)
+    cached = _geocode_cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     if provider == "amap" and amap_key:
         try:
             resp = requests.get(
                 "https://restapi.amap.com/v3/geocode/geo",
-                params={"key": amap_key, "address": q, "output": "json"},
+                params={"key": amap_key, "address": q2, "output": "json"},
                 timeout=12,
             )
             resp.raise_for_status()
@@ -741,14 +982,16 @@ def geocode_search(q: str = Query(..., min_length=1, max_length=200), operator: 
                     lat = float(lat_s)
                 except Exception:
                     continue
-                label = item.get("formatted_address") or item.get("address") or q
+                label = item.get("formatted_address") or item.get("address") or q2
                 results.append({"x": lon, "y": lat, "label": label, "bounds": None, "raw": item})
-            return {"results": results}
+            out = {"results": results}
+            _geocode_cache_set(cache_key, out, ttl_seconds=6 * 60 * 60, maxsize=800)
+            return out
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"地理搜索失败: {str(e)}")
 
     nominatim_base = (os.getenv("NOMINATIM_BASE_URL") or "https://nominatim.openstreetmap.org").rstrip("/")
-    params = {"q": q, "format": "json", "limit": 5, "addressdetails": 1}
+    params = {"q": q2, "format": "json", "limit": 5, "addressdetails": 1}
     headers = {"User-Agent": "AutoMoGuDingSaaS/1.0", "Accept-Language": "zh-CN,zh;q=0.9"}
     last_err: Optional[Exception] = None
     for attempt in range(2):
@@ -780,17 +1023,18 @@ def geocode_search(q: str = Query(..., min_length=1, max_length=200), operator: 
                     {
                         "x": lon,
                         "y": lat,
-                        "label": item.get("display_name") or q,
+                        "label": item.get("display_name") or q2,
                         "bounds": bounds,
                         "raw": item,
                     }
                 )
-            return {"results": results}
+            out = {"results": results}
+            _geocode_cache_set(cache_key, out, ttl_seconds=60 * 60, maxsize=800)
+            return out
         except Exception as e:
             last_err = e
             time.sleep(0.4 * (attempt + 1))
     raise HTTPException(status_code=502, detail=f"地理搜索失败: {str(last_err) if last_err else 'unknown'}")
-
 
 @router.get("/geocode/reverse")
 def geocode_reverse(
@@ -802,6 +1046,10 @@ def geocode_reverse(
     amap_key = (os.getenv("AMAP_KEY") or "").strip()
     if not provider:
         provider = "amap" if amap_key else "osm"
+    cache_key = ("reverse", provider, round(float(lat), 6), round(float(lon), 6))
+    cached = _geocode_cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     if provider == "amap" and amap_key:
         try:
@@ -843,7 +1091,9 @@ def geocode_reverse(
                 },
                 "raw": data,
             }
-            return {"result": out}
+            out2 = {"result": out}
+            _geocode_cache_set(cache_key, out2, ttl_seconds=6 * 60 * 60, maxsize=1200)
+            return out2
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"逆地理解析失败: {str(e)}")
 
@@ -861,7 +1111,9 @@ def geocode_reverse(
             )
             resp.raise_for_status()
             data = resp.json()
-            return {"result": data}
+            out = {"result": data}
+            _geocode_cache_set(cache_key, out, ttl_seconds=60 * 60, maxsize=1200)
+            return out
         except Exception as e:
             last_err = e
             time.sleep(0.4 * (attempt + 1))
