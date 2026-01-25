@@ -1,0 +1,20 @@
+kind: Deployment
+name: dakagxy
+replicas: 1
+containers:
+  - name: main
+    image: ghcr.io/maserpoassr/automoguding-saas:latest
+    working_dir: ''  # 留空使用默认 /app
+    env:
+      - name: DB_PATH
+        value: /app/data/database.db  # 👈 修正：指向 data 目录下的文件
+    ports:
+      - containerPort: 8000
+    volumes:
+      - name: data
+        mountPath: /app/data
+
+volumes:
+  - name: data
+    hostPath:
+      path: /opt/apps/dakagxy/data

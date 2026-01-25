@@ -1,14 +1,20 @@
 # Stage 1: Build Frontend
-FROM node:22-bookworm-slim AS frontend-build
-WORKDIR /app/web
-COPY web/package*.json ./
-RUN npm ci --no-audit --no-fund || npm install --no-audit --no-fund
-COPY web/ ./
-RUN npm run build
+FROM node:20-alpine AS frontend-build
+WORKDIR /app
+
+COPY web/package*.json ./web/
+RUN cd web && npm install
+
+COPY web/ ./web/
+RUN cd web && npm run build
 
 # Stage 2: Backend
 FROM python:3.10-slim
 WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -17,10 +23,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY server/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY server/ ./server/
 COPY --from=frontend-build /app/web/dist ./web/dist
+
+ARG DOWNLOAD_MODELS=1
+RUN if [ "$DOWNLOAD_MODELS" = "1" ]; then \
+      python -c "from server.util.CaptchaUtils import ensure_model_exists, MODEL_URLS; [ensure_model_exists(k,v) for k,v in MODEL_URLS.items()]" ; \
+    fi
 
 # 暴露端口
 EXPOSE 8000
