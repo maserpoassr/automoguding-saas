@@ -1,9 +1,12 @@
 <template>
   <div class="login-page">
     <div class="login-card-wrap">
-      <el-card class="login-card">
+      <el-card class="login-card page-card">
         <template #header>
-          <div class="login-title">登录</div>
+          <div class="login-header">
+            <div class="login-title">工学云管理平台</div>
+            <div class="login-subtitle">后台登录</div>
+          </div>
         </template>
         <el-form :model="form" @keyup.enter="submit">
           <el-form-item label="账号">
@@ -79,9 +82,19 @@ const submit = async () => {
 .login-card {
   width: 100%;
 }
+.login-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .login-title {
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+.login-subtitle {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 :global(html.dark) .login-page {
   background:
