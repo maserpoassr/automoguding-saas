@@ -145,6 +145,9 @@
           <el-form-item label="提交时间(周几)">
              <el-input-number v-model="form.reportSettings.weekly.submitTime" :min="1" :max="7" />
           </el-form-item>
+          <el-form-item v-if="form.reportSettings.weekly.enabled" label="提交时刻">
+            <el-time-select v-model="form.reportSettings.weekly.submitAt" start="00:00" step="00:01" end="23:59" />
+          </el-form-item>
           <el-form-item v-if="form.reportSettings.weekly.enabled" label="周报预览">
             <div class="report-preview">
               <div class="report-preview-meta">字数：{{ weeklyCount }} / 1000</div>
@@ -158,6 +161,9 @@
           </el-form-item>
           <el-form-item label="提交时间(号)">
              <el-input-number v-model="form.reportSettings.monthly.submitTime" :min="1" :max="31" />
+          </el-form-item>
+          <el-form-item v-if="form.reportSettings.monthly.enabled" label="提交时刻">
+            <el-time-select v-model="form.reportSettings.monthly.submitAt" start="00:00" step="00:01" end="23:59" />
           </el-form-item>
           <el-form-item v-if="form.reportSettings.monthly.enabled" label="月报预览">
             <div class="report-preview">
@@ -193,7 +199,7 @@
       <el-form-item v-if="!isMobile" class="desktop-actions">
         <div class="form-actions">
           <el-button type="primary" @click="save">保存</el-button>
-          <el-button @click="$router.back()">取消</el-button>
+          <el-button @click="cancelEdit">取消</el-button>
         </div>
       </el-form-item>
 
@@ -204,7 +210,7 @@
   <div v-if="isMobile" class="mobile-bottom-actions">
     <div class="mobile-bottom-actions-inner">
       <el-button type="primary" style="flex: 1" @click="save">保存</el-button>
-      <el-button style="flex: 1" @click="$router.back()">取消</el-button>
+      <el-button style="flex: 1" @click="cancelEdit">取消</el-button>
     </div>
   </div>
 </template>
@@ -212,21 +218,9 @@
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
 import { http } from '../api/http'
 import { parseCnDotAddress, formatCnDotAddress } from '../utils/cnAddress'
-
-import icon from 'leaflet/dist/images/marker-icon.png'
-import iconShadow from 'leaflet/dist/images/marker-shadow.png'
-let DefaultIcon = L.icon({
-    iconUrl: icon,
-    shadowUrl: iconShadow,
-    iconSize: [25, 41],
-    iconAnchor: [12, 41]
-});
-L.Marker.prototype.options.icon = DefaultIcon;
+import { notifySuccess, notifyError, notifyWarning, notifyInfo, resolveErrorMessage } from '../utils/notify'
 
 const route = useRoute()
 const router = useRouter()
@@ -237,6 +231,7 @@ const loading = ref(false)
 const activeTab = ref('basic')
 const mapInstance = ref(null)
 const marker = ref(null)
+let L = null
 const isMobile = ref(false)
 const aiTestLoading = ref(false)
 const aiTestStatus = ref('')
@@ -289,8 +284,8 @@ const form = reactive({
   },
   reportSettings: {
     daily: { enabled: true, imageCount: 0, submitTime: '12:00', submitDays: [1, 2, 3, 4, 5, 6, 7] },
-    weekly: { enabled: false, imageCount: 0, submitTime: 4 },
-    monthly: { enabled: false, imageCount: 0, submitTime: 29 }
+    weekly: { enabled: false, imageCount: 0, submitTime: 4, submitAt: '12:00' },
+    monthly: { enabled: false, imageCount: 0, submitTime: 29, submitAt: '12:00' }
   },
   ai: {
       model: "gpt-4o-mini",
@@ -351,14 +346,32 @@ const applyAddressStruct = (rawAddress, opts = {}) => {
   }
 }
 
+const ensureLeaflet = async () => {
+  if (L) return L
+  const mod = await import('leaflet')
+  await import('leaflet/dist/leaflet.css')
+  const icon = (await import('leaflet/dist/images/marker-icon.png')).default
+  const iconShadow = (await import('leaflet/dist/images/marker-shadow.png')).default
+  L = mod.default
+  const DefaultIcon = L.icon({
+    iconUrl: icon,
+    shadowUrl: iconShadow,
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+  })
+  L.Marker.prototype.options.icon = DefaultIcon
+  return L
+}
+
 const updateLocation = async (lat, lng, label = '') => {
+    const Leaflet = await ensureLeaflet()
     lat = parseFloat(lat);
     lng = parseFloat(lng);
 
     if (marker.value) {
         marker.value.setLatLng([lat, lng]);
     } else {
-        marker.value = L.marker([lat, lng]).addTo(mapInstance.value);
+        marker.value = Leaflet.marker([lat, lng]).addTo(mapInstance.value);
     }
     
     form.clockIn.location.latitude = lat.toFixed(6);
@@ -393,7 +406,7 @@ const updateLocation = async (lat, lng, label = '') => {
         if (err?.code === 'ERR_CANCELED') return
         console.error("逆地理编码失败", err);
         if (!label) {
-             ElMessage.warning(err.response?.data?.detail || '无法自动获取详细地址，请手动填写');
+             notifyWarning(err.response?.data?.detail || '无法自动获取详细地址，请手动填写')
         }
     }
 }
@@ -408,7 +421,7 @@ const normalizeSearchQuery = (q) => {
 const searchPlace = async () => {
     const q = normalizeSearchQuery(searchQuery.value)
     if (!q) {
-        ElMessage.warning('请输入要搜索的地点')
+        notifyWarning('请输入要搜索的地点')
         return
     }
     if (!mapInstance.value) {
@@ -420,7 +433,7 @@ const searchPlace = async () => {
         const res = await http.get('/geocode/search', { params: { q }, signal: geocodeSearchAbort.signal })
         const results = res.data?.results || []
         if (!Array.isArray(results) || results.length === 0) {
-            ElMessage.warning('没有搜索到结果，请换一个关键词')
+            notifyWarning('没有搜索到结果，请换一个关键词')
             return
         }
         const best = results[0]
@@ -435,57 +448,59 @@ const searchPlace = async () => {
         updateLocation(lat, lng, best.label || q)
     } catch (e) {
         if (e?.code === 'ERR_CANCELED') return
-        ElMessage.error(e.response?.data?.detail || '搜索失败，请稍后再试')
+        notifyError(e.response?.data?.detail || '搜索失败，请稍后再试')
     }
 }
 
 const initMap = () => {
-  if (mapInstance.value) return;
+  if (mapInstance.value) return Promise.resolve()
 
-  let lat = 30.5728;
-  let lng = 104.0668;
-  
-  if (form.clockIn.location.latitude && form.clockIn.location.longitude) {
-      const lat2 = parseFloat(form.clockIn.location.latitude);
-      const lng2 = parseFloat(form.clockIn.location.longitude);
+  return ensureLeaflet().then((Leaflet) => {
+    let lat = 30.5728
+    let lng = 104.0668
+
+    if (form.clockIn.location.latitude && form.clockIn.location.longitude) {
+      const lat2 = parseFloat(form.clockIn.location.latitude)
+      const lng2 = parseFloat(form.clockIn.location.longitude)
       if (Number.isFinite(lat2) && Number.isFinite(lng2)) {
         lat = lat2
         lng = lng2
       }
-  }
+    }
 
-  mapInstance.value = L.map('map').setView([lat, lng], 13);
-  
-  const tileProvider = String(import.meta.env.VITE_MAP_TILE_PROVIDER || '').trim().toLowerCase()
-  const tdtKey = String(import.meta.env.VITE_TDT_KEY || '').trim()
-  const useTdt = (tileProvider === 'tdt' || tileProvider === 'tianditu') || (!tileProvider && !!tdtKey)
+    mapInstance.value = Leaflet.map('map').setView([lat, lng], 13)
 
-  if (useTdt && tdtKey) {
-    const subdomains = ['0', '1', '2', '3', '4', '5', '6', '7']
-    L.tileLayer(`https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=${encodeURIComponent(tdtKey)}`, {
-      subdomains,
-      maxZoom: 18,
-      attribution: '© 天地图'
-    }).addTo(mapInstance.value)
-    L.tileLayer(`https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=${encodeURIComponent(tdtKey)}`, {
-      subdomains,
-      maxZoom: 18,
-      attribution: '© 天地图'
-    }).addTo(mapInstance.value)
-  } else {
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors'
-    }).addTo(mapInstance.value)
-  }
+    const tileProvider = String(import.meta.env.VITE_MAP_TILE_PROVIDER || '').trim().toLowerCase()
+    const tdtKey = String(import.meta.env.VITE_TDT_KEY || '').trim()
+    const useTdt = (tileProvider === 'tdt' || tileProvider === 'tianditu') || (!tileProvider && !!tdtKey)
 
-  if (Number.isFinite(lat) && Number.isFinite(lng) && form.clockIn.location.latitude && form.clockIn.location.longitude) {
-    marker.value = L.marker([lat, lng]).addTo(mapInstance.value);
-  }
+    if (useTdt && tdtKey) {
+      const subdomains = ['0', '1', '2', '3', '4', '5', '6', '7']
+      Leaflet.tileLayer(`https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=${encodeURIComponent(tdtKey)}`, {
+        subdomains,
+        maxZoom: 18,
+        attribution: '© 天地图',
+      }).addTo(mapInstance.value)
+      Leaflet.tileLayer(`https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=${encodeURIComponent(tdtKey)}`, {
+        subdomains,
+        maxZoom: 18,
+        attribution: '© 天地图',
+      }).addTo(mapInstance.value)
+    } else {
+      Leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+      }).addTo(mapInstance.value)
+    }
 
-  mapInstance.value.on('click', async (e) => {
-      const { lat, lng } = e.latlng;
-      updateLocation(lat, lng);
-  });
+    if (Number.isFinite(lat) && Number.isFinite(lng) && form.clockIn.location.latitude && form.clockIn.location.longitude) {
+      marker.value = Leaflet.marker([lat, lng]).addTo(mapInstance.value)
+    }
+
+    mapInstance.value.on('click', async (e) => {
+      const { lat, lng } = e.latlng
+      updateLocation(lat, lng)
+    })
+  })
 }
 
 const fetchUser = async () => {
@@ -529,10 +544,46 @@ const fetchUser = async () => {
         form.reportSettings.daily.submitDays = [1, 2, 3, 4, 5, 6, 7]
       }
     }
+    if (!form.reportSettings.weekly) {
+      form.reportSettings.weekly = { enabled: false, imageCount: 0, submitTime: 4, submitAt: '12:00' }
+    } else {
+      if (!form.reportSettings.weekly.submitTime) form.reportSettings.weekly.submitTime = 4
+      if (!form.reportSettings.weekly.submitAt) form.reportSettings.weekly.submitAt = '12:00'
+    }
+    if (!form.reportSettings.monthly) {
+      form.reportSettings.monthly = { enabled: false, imageCount: 0, submitTime: 29, submitAt: '12:00' }
+    } else {
+      if (!form.reportSettings.monthly.submitTime) form.reportSettings.monthly.submitTime = 29
+      if (!form.reportSettings.monthly.submitAt) form.reportSettings.monthly.submitAt = '12:00'
+    }
   } catch (error) {
-    ElMessage.error('加载失败')
+    notifyError('加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+const _clone = (obj) => JSON.parse(JSON.stringify(obj))
+
+const defaultFormSnapshot = _clone(form)
+
+const resetToDefaultForm = () => {
+  const next = _clone(defaultFormSnapshot)
+  for (const k of Object.keys(form)) {
+    if (!(k in next)) delete form[k]
+  }
+  for (const [k, v] of Object.entries(next)) {
+    form[k] = v
+  }
+  reportPreview.daily = ''
+  reportPreview.weekly = ''
+  reportPreview.monthly = ''
+  activeTab.value = 'basic'
+  marker.value = null
+  if (mapInstance.value) {
+    mapInstance.value.off?.()
+    mapInstance.value.remove?.()
+    mapInstance.value = null
   }
 }
 
@@ -559,11 +610,25 @@ const save = async () => {
     } else {
       await http.post('/users', payload)
     }
-    ElMessage.success('保存成功')
-    router.push('/')
+    notifySuccess('保存成功')
+    if (isEdit.value) {
+      fetchUser()
+    } else {
+      resetToDefaultForm()
+    }
   } catch (error) {
-    ElMessage.error('保存失败: ' + (error.friendlyMessage || error.message))
+    notifyError(`保存失败：${resolveErrorMessage(error, '请求失败')}`)
   }
+}
+
+const cancelEdit = () => {
+  if (isEdit.value) {
+    fetchUser()
+    notifyInfo('已撤销未保存的修改')
+    return
+  }
+  resetToDefaultForm()
+  notifyInfo('已清空未保存的内容')
 }
 
 const testAi = async () => {
@@ -571,7 +636,7 @@ const testAi = async () => {
   const apikey = (form.ai.apikey || '').trim()
   const model = (form.ai.model || '').trim()
   if (!apiUrl || !apikey || !model) {
-    ElMessage.warning('请先填写 API URL、API Key 和 Model')
+    notifyWarning('请先填写 API URL、API Key 和 Model')
     return
   }
   aiTestLoading.value = true
@@ -581,10 +646,10 @@ const testAi = async () => {
     const res = await http.post('/ai/test', { apiUrl, apikey, model })
     aiTestStatus.value = res.data?.ok ? 'ok' : 'fail'
     aiTestLatencyMs.value = typeof res.data?.latency_ms === 'number' ? res.data.latency_ms : null
-    ElMessage.success('AI 可用')
+    notifySuccess('AI 可用')
   } catch (e) {
     aiTestStatus.value = 'fail'
-    ElMessage.error(e.friendlyMessage || e.response?.data?.detail || 'AI 测试失败')
+    notifyError(resolveErrorMessage(e, 'AI 测试失败'))
   } finally {
     aiTestLoading.value = false
   }
@@ -600,12 +665,12 @@ const generateDailyReport = async () => {
       reportPreview.daily = content
     }
     if (res.data?.already_submitted) {
-      ElMessage.warning('检测到今天可能已提交过日报，仅生成内容供参考')
+      notifyWarning('检测到今天可能已提交过日报，仅生成内容供参考')
     } else {
-      ElMessage.success('已生成日报内容')
+      notifySuccess('已生成日报内容')
     }
   } catch (e) {
-    ElMessage.error(e.friendlyMessage || e.response?.data?.detail || '生成失败')
+    notifyError(resolveErrorMessage(e, '生成失败'))
   } finally {
     aiDailyLoading.value = false
   }
@@ -615,15 +680,15 @@ const submitDailyReport = async () => {
   if (!isEdit.value) return
   const content = String(reportPreview.daily || '').trim()
   if (!content) {
-    ElMessage.warning('请先生成或填写日报内容')
+    notifyWarning('请先生成或填写日报内容')
     return
   }
   submitDailyLoading.value = true
   try {
     const res = await http.post(`/users/${route.params.id}/reports/daily/submit`, { content })
-    ElMessage.success(`提交成功：${res.data?.title || '日报'}`)
+    notifySuccess(`提交成功：${res.data?.title || '日报'}`)
   } catch (e) {
-    ElMessage.error(e.friendlyMessage || e.response?.data?.detail || '提交失败')
+    notifyError(resolveErrorMessage(e, '提交失败'))
   } finally {
     submitDailyLoading.value = false
   }
@@ -634,7 +699,7 @@ const applyModelScopePreset = () => {
   form.ai.model = 'Qwen/Qwen3-Next-80B-A3B-Instruct'
   aiTestStatus.value = ''
   aiTestLatencyMs.value = null
-  ElMessage.success('已填入魔搭预设，请粘贴 Token 后点击“测试 AI”')
+  notifySuccess('已填入魔搭预设，请粘贴 Token 后点击“测试 AI”')
 }
 
 const _pickBestAddress = (...values) => {
@@ -654,7 +719,7 @@ const _pickBestAddress = (...values) => {
 
 const fillFromAccountAddress = async () => {
   if (!isEdit.value) {
-    ElMessage.warning('请先保存用户后再自动填充')
+    notifyWarning('请先保存用户后再自动填充')
     return
   }
   addrFillLoading.value = true
@@ -662,19 +727,19 @@ const fillFromAccountAddress = async () => {
     const res = await http.get(`/users/${route.params.id}/account-address`)
     const bestAddr = _pickBestAddress(res.data?.address, res.data?.addressCandidates, res.data?.maskedAddress, res.data?.maskedCandidates)
     if (!bestAddr) {
-      ElMessage.warning('未获取到账号详细地址')
+      notifyWarning('未获取到账号详细地址')
       return
     }
     form.clockIn.location.address = bestAddr
     searchQuery.value = bestAddr
     if (!mapInstance.value) {
-      initMap()
+      await initMap()
       await nextTick()
     }
     await searchPlace()
-    ElMessage.success('已填入账号详细地址，并尝试自动定位经纬度')
+    notifySuccess('已填入账号详细地址，并尝试自动定位经纬度')
   } catch (e) {
-    ElMessage.error(e.friendlyMessage || e.response?.data?.detail || '自动填充失败')
+    notifyError(resolveErrorMessage(e, '自动填充失败'))
   } finally {
     addrFillLoading.value = false
   }
@@ -683,18 +748,19 @@ const fillFromAccountAddress = async () => {
 watch(activeTab, (val) => {
     if (val === 'clockin') {
         nextTick(() => {
-            initMap();
-            setTimeout(() => {
-                mapInstance.value?.invalidateSize();
-            }, 100);
-        });
+            initMap().then(() => {
+              setTimeout(() => {
+                  mapInstance.value?.invalidateSize();
+              }, 100);
+            })
+        })
     }
 });
 
 onMounted(async () => {
     await fetchUser();
     if (activeTab.value === 'clockin') {
-        initMap();
+        await initMap()
     }
 })
 
@@ -718,11 +784,30 @@ const updateIsMobile = () => {
 
 onMounted(() => {
   updateIsMobile()
-  window.addEventListener('resize', updateIsMobile)
+  let raf = 0
+  const onResize = () => {
+    if (raf) return
+    raf = requestAnimationFrame(() => {
+      raf = 0
+      updateIsMobile()
+    })
+  }
+  window.addEventListener('resize', onResize)
+  onUnmounted(() => {
+    if (raf) cancelAnimationFrame(raf)
+    window.removeEventListener('resize', onResize)
+  })
 })
 onUnmounted(() => {
   if (addrStructTimer) clearTimeout(addrStructTimer)
-  window.removeEventListener('resize', updateIsMobile)
+  if (geocodeSearchAbort) geocodeSearchAbort.abort()
+  if (geocodeReverseAbort) geocodeReverseAbort.abort()
+  if (mapInstance.value) {
+    mapInstance.value.off?.()
+    mapInstance.value.remove?.()
+    mapInstance.value = null
+  }
+  marker.value = null
 })
 </script>
 

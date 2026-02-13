@@ -9,6 +9,9 @@ services:
       - ./data/images:/app/server/images
     environment:
       - TZ=Asia/Shanghai
+      - SCHEDULER_TIMEZONE=${SCHEDULER_TIMEZONE:-Asia/Shanghai}
+      - SCHEDULER_JITTER_SECONDS=${SCHEDULER_JITTER_SECONDS:-600}
+      - SCHEDULER_REPORT_JITTER_SECONDS=${SCHEDULER_REPORT_JITTER_SECONDS:-0}
       - DB_PATH=/app/data/database.db
       - GEOCODE_PROVIDER=${GEOCODE_PROVIDER:-osm}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}

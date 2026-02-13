@@ -101,11 +101,15 @@ def perform_clock_in(
         logger.info(f"用户 {user_name} 开始 {display_type} 打卡")
 
         # 打卡图片和备注
+        img_count = config.get_value("config.clockIn.imageCount")
+        if not isinstance(img_count, int) or img_count < 0:
+            img_count = 1
+            
         attachments = upload_img(
             api_client.get_upload_token(),
             config.get_value("userInfo.orgJson.snowFlakeId"),
             config.get_value("userInfo.userId"),
-            config.get_value("config.clockIn.imageCount"),
+            img_count,
         )
 
         description_list = config.get_value("config.clockIn.description")
@@ -245,11 +249,15 @@ def _submit_report_common(
         )
 
         # 上传图片
+        img_count = config.get_value(image_count_key)
+        if not isinstance(img_count, int) or img_count < 0:
+            img_count = 1
+
         attachments = upload_img(
             api_client.get_upload_token(),
             config.get_value("userInfo.orgJson.snowFlakeId"),
             config.get_value("userInfo.userId"),
-            config.get_value(image_count_key),
+            img_count,
         )
 
         report_info = {
@@ -348,9 +356,22 @@ def submit_weekly_report(
 ) -> Dict[str, Any]:
     """提交周报"""
     submit_day = config.get_value("config.reportSettings.weekly.submitTime")
+    submit_at = config.get_value("config.reportSettings.weekly.submitAt") or "12:00"
+
+    def parse_submit_time(value) -> tuple[int, int]:
+        if isinstance(value, str) and ":" in value:
+            try:
+                hh, mm = value.split(":", 1)
+                return int(hh), int(mm)
+            except Exception:
+                return 12, 0
+        return 12, 0
 
     def check_time(t: datetime) -> bool:
-        return (t.weekday() + 1 == submit_day) and (t.hour >= 12)
+        hh, mm = parse_submit_time(submit_at)
+        if not (t.weekday() + 1 == submit_day):
+            return False
+        return (t.hour > hh) or (t.hour == hh and t.minute >= mm)
 
     return _submit_report_common(
         api_client=api_client,
@@ -371,12 +392,28 @@ def submit_monthly_report(
 ) -> Dict[str, Any]:
     """提交月报"""
     submit_day = config.get_value("config.reportSettings.monthly.submitTime")
+    submit_at = config.get_value("config.reportSettings.monthly.submitAt") or "12:00"
+    # 默认每月20号
+    if not isinstance(submit_day, int):
+        submit_day = 20
+
+    def parse_submit_time(value) -> tuple[int, int]:
+        if isinstance(value, str) and ":" in value:
+            try:
+                hh, mm = value.split(":", 1)
+                return int(hh), int(mm)
+            except Exception:
+                return 12, 0
+        return 12, 0
 
     def check_time(t: datetime) -> bool:
         next_month = t.replace(day=28) + timedelta(days=4)
         last_day_of_month = (next_month - timedelta(days=next_month.day)).day
         target_day = min(submit_day, last_day_of_month)
-        return (t.day == target_day) and (t.hour >= 12)
+        if t.day != target_day:
+            return False
+        hh, mm = parse_submit_time(submit_at)
+        return (t.hour > hh) or (t.hour == hh and t.minute >= mm)
 
     return _submit_report_common(
         api_client=api_client,
@@ -393,7 +430,9 @@ def submit_monthly_report(
 
 
 def run_task_by_config(
-    config_data: Dict[str, Any], forced_checkin_type: Optional[str] = None
+    config_data: Dict[str, Any],
+    forced_checkin_type: Optional[str] = None,
+    specific_task_type: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """根据配置字典执行任务"""
     config = ConfigManager(config=config_data)
@@ -427,12 +466,24 @@ def run_task_by_config(
             f"开始执行：{desensitize_name(config.get_value('userInfo.nikeName'))}"
         )
 
-        results = [
-            perform_clock_in(api_client, config, forced_checkin_type),
-            submit_daily_report(api_client, config),
-            submit_weekly_report(config, api_client),
-            submit_monthly_report(config, api_client),
+        all_tasks = [
+            ("clock_in", lambda: perform_clock_in(api_client, config, forced_checkin_type)),
+            ("daily_report", lambda: submit_daily_report(api_client, config)),
+            ("weekly_report", lambda: submit_weekly_report(config, api_client)),
+            ("monthly_report", lambda: submit_monthly_report(config, api_client)),
         ]
+
+        results = []
+        for t_type, t_func in all_tasks:
+            # 如果指定了任务类型，则只执行匹配的任务
+            # report 匹配所有报告
+            if specific_task_type:
+                if specific_task_type == "report" and "report" in t_type:
+                    pass
+                elif specific_task_type != t_type:
+                    continue
+            
+            results.append(t_func())
 
     except Exception as e:
         error_message = f"执行任务时发生严重错误: {str(e)}"
