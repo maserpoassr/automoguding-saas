@@ -7,23 +7,22 @@ class UserBase(SQLModel):
     phone: str = Field(index=True, unique=True)
     password: str
     remark: Optional[str] = Field(default=None, index=True)
-    
-    # 配置字段，使用 Dict 以利用 JSON 存储
+    app_password_hash: Optional[str] = Field(default=None)
+    app_enabled: bool = Field(default=True, index=True)
+
     clockIn: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     reportSettings: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     ai: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     pushNotifications: List[Dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     device: str = "{brand: TA J20, systemVersion: 17, Platform: Android, isPhysicalDevice: true, incremental: K23V10A}"
-    
+
     enable_clockin: bool = Field(default=True)
 
 class User(UserBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     last_run_time: Optional[str] = None
     last_status: Optional[str] = None
-    # 这里的 logs 仅作为简单的状态描述或最近一条日志
     logs: List[str] = Field(default_factory=list, sa_column=Column(JSON))
-    # 存储完整的执行结果 JSON
     last_execution_result: List[Dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
 
 class UserCreate(UserBase):
@@ -49,6 +48,8 @@ class UserUpdate(SQLModel):
     phone: Optional[str] = None
     password: Optional[str] = None
     remark: Optional[str] = None
+    app_password_hash: Optional[str] = None
+    app_enabled: Optional[bool] = None
     clockIn: Optional[Dict[str, Any]] = None
     reportSettings: Optional[Dict[str, Any]] = None
     ai: Optional[Dict[str, Any]] = None
@@ -101,3 +102,11 @@ class AdminUser(SQLModel, table=True):
     password_hash: str
     role: str = Field(default="admin", index=True)
     enabled: bool = Field(default=True, index=True)
+
+class AppUser(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, index=True)
+    phone: str = Field(index=True, unique=True)
+    password_hash: str
+    enabled: bool = Field(default=True, index=True)
+    bound_user_id: Optional[int] = Field(default=None, index=True)
