@@ -104,6 +104,9 @@ def get_operator(payload: dict = Depends(get_auth_payload)) -> dict:
 def get_viewer(payload: dict = Depends(get_auth_payload)) -> dict:
     return require_roles(payload, ["admin", "operator", "viewer"])
 
+def get_user(payload: dict = Depends(get_auth_payload)) -> dict:
+    return require_roles(payload, ["user"])
+
 def get_client_ip(request: Request) -> str:
     xff = request.headers.get("x-forwarded-for")
     if xff:
