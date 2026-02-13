@@ -31,6 +31,10 @@ def _migrate_sqlite_schema():
                 conn.execute(text("ALTER TABLE user ADD COLUMN last_execution_result TEXT"))
             if "remark" not in col_names:
                 conn.execute(text("ALTER TABLE user ADD COLUMN remark TEXT"))
+            if "app_password_hash" not in col_names:
+                conn.execute(text("ALTER TABLE user ADD COLUMN app_password_hash TEXT"))
+            if "app_enabled" not in col_names:
+                conn.execute(text("ALTER TABLE user ADD COLUMN app_enabled INTEGER DEFAULT 1"))
 
             if _table_exists("batchjob"):
                 columns = conn.execute(text("PRAGMA table_info('batchjob')")).fetchall()
